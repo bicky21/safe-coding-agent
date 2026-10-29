@@ -109,3 +109,28 @@ def test_preflight_good_key(monkeypatch):
     from safe_coding_agent.models import preflight
     monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
     preflight(parse_model("openai:x", base_url="https://api.groq.com/openai/v1", api_key_env="GROQ_API_KEY"))
+
+
+@pytest.mark.parametrize("text, seconds", [
+    ("Rate limit reached. Please try again in 12.5s.", 12.5),
+    ("please try again in 850ms", 0.85),
+    ("Please try again in 1m30s", 90.0),
+    ("Rate limit reached.", None),
+])
+def test_retry_after(text, seconds):
+    from safe_coding_agent.models import retry_after
+    assert retry_after(text) == seconds
+
+
+def test_waits_as_long_as_the_provider_asks(monkeypatch):
+    import safe_coding_agent.models as models
+    waits = []
+    monkeypatch.setattr(models.time, "sleep", waits.append)
+    m = Flaky([RuntimeError("429 rate limit: Please try again in 3.2s")])
+    assert invoke_with_retry(m, []) == "ok"
+    assert waits == [pytest.approx(3.7)]
+
+
+def test_too_large_is_detected():
+    assert ModelError("Error code: 413 - Request too large for model").too_large
+    assert not ModelError("Error code: 401 - Invalid API Key").too_large

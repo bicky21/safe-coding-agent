@@ -41,6 +41,8 @@ class ScriptedModel(BaseChatModel):
     def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
         prompt = messages[-1].content
         text = SCRIPT.next_reply(prompt, self.temperature)
+        if text.startswith("RAISE:"):            # scripted provider error, e.g. "RAISE:401 invalid key"
+            raise RuntimeError(text[len("RAISE:"):])
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=text))])
 
 

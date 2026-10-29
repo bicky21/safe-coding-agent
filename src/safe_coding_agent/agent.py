@@ -20,7 +20,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from . import prompts
-from .models import REPLY_RESERVE, ModelSpec, context_for, invoke_with_retry, make_model
+from .models import REPLY_RESERVE, ModelError, ModelSpec, context_for, invoke_with_retry, make_model
 from .safety import check_files
 from .sandbox import RunResult
 from .tasks import Task
@@ -64,7 +64,7 @@ class Settings:
 @dataclass
 class Attempt:
     number: int
-    status: str                      # passed | failed | blocked | repeat | invalid | error
+    status: str                      # passed | failed | blocked | repeat | invalid | error (model call failed)
     files: dict[str, str]
     feedback: str
     passed: int = 0
@@ -115,8 +115,18 @@ class CodingAgent:
                 self.say(f"WARNING: prompt (~{len(prompt) // 3} tokens) is bigger than the Ollama context "
                          f"limit ({num_ctx}); Ollama will cut it. Raise SCA_OLLAMA_MAX_CTX or lower --context-chars")
             spec = replace(spec, num_ctx=num_ctx)
-        model = make_model(spec, self.s.temperature(attempt))
-        return invoke_with_retry(model, [SystemMessage(system), HumanMessage(prompt)])
+        while True:
+            model = make_model(spec, self.s.temperature(attempt))
+            try:
+                return invoke_with_retry(model, [SystemMessage(system), HumanMessage(prompt)])
+            except ModelError as e:
+                # free tiers count prompt + the reserved answer length against a small limit
+                # (e.g. Groq: 8000 tokens per minute): ask for a shorter answer and try again
+                if not e.too_large or spec.max_tokens <= 1024:
+                    raise
+                spec = replace(spec, max_tokens=spec.max_tokens // 2)
+                self.say(f"request too large for the provider; retrying with max answer length "
+                         f"{spec.max_tokens} tokens")
 
     def _n(self, state: State) -> int:
         return len(state.get("attempts", []))
@@ -136,20 +146,34 @@ class CodingAgent:
         return [f"attempt {a.number}: {prompts.first_line(a.feedback)}" for a in state.get("attempts", [])[:-1]]
 
     # ------------------------------------------------------------ nodes
+    def _model_failed(self, state: State, error: ModelError) -> dict:
+        """The model could not be called (after retries): record it and stop this task, so one
+        failing call never crashes a whole benchmark."""
+        self.say(f"attempt {self._n(state) + 1}: MODEL ERROR, stopping this task: {str(error)[:160]}")
+        return {"new_files": {}, **self._record({**state, "new_files": {}}, "error", str(error))}
+
     def plan(self, state: State) -> dict:
         n = self._n(state) + 1
         self.say(f"attempt {n}: planning")
-        text = self._ask(prompts.PLAN_SYSTEM, prompts.plan_prompt(
-            self.task, state.get("files", {}), state.get("plan", ""), state.get("feedback", ""),
-            self.s.code_budget), n)
-        return {"plan": text.strip()}
+        try:
+            text = self._ask(prompts.PLAN_SYSTEM, prompts.plan_prompt(
+                self.task, state.get("files", {}), state.get("plan", ""), state.get("feedback", ""),
+                self.s.code_budget), n)
+        except ModelError as e:
+            return self._model_failed(state, e)
+        return {"plan": text.strip(), "status": "planned"}
 
     def write_code(self, state: State) -> dict:
+        if state.get("status") == "error":          # planning already failed
+            return {}
         n = self._n(state) + 1
         self.say(f"attempt {n}: writing code")
-        reply = self._ask(prompts.SYSTEM, prompts.code_prompt(
-            self.task, state.get("files", {}), state.get("plan", "") if self.s.plan_first else "",
-            state.get("feedback", ""), self._earlier(state), self.s.code_budget), n)
+        try:
+            reply = self._ask(prompts.SYSTEM, prompts.code_prompt(
+                self.task, state.get("files", {}), state.get("plan", "") if self.s.plan_first else "",
+                state.get("feedback", ""), self._earlier(state), self.s.code_budget), n)
+        except ModelError as e:
+            return self._model_failed(state, e)
         files, problems = prompts.parse_files(reply, self.task)
         if problems and not files:
             fb = ("Your answer could not be used: " + "; ".join(problems) + ".\n\n" + prompts.OUTPUT_FORMAT)
@@ -238,6 +262,8 @@ class CodingAgent:
         return "retry"
 
     def _after_write(self, state: State) -> str:
+        if state.get("status") == "error":
+            return "done"
         return self._after_attempt(state) if state.get("status") == "invalid" else "ok"
 
     def _after_check(self, state: State) -> str:
@@ -293,8 +319,8 @@ class TaskResult:
         best = max(tested, key=lambda a: (a.passed, a.number), default=None)
         if any(a.status == "passed" for a in attempts):
             status = "passed"
-        elif attempts and attempts[-1].status == "blocked":
-            status = "blocked"
+        elif attempts and attempts[-1].status in ("blocked", "error"):
+            status = attempts[-1].status
         else:
             status = "failed"
         first = attempts[0].passed if attempts else 0

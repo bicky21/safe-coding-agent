@@ -114,3 +114,15 @@ def test_list_builtin(capsys):
 def test_bad_model_spec(capsys, tmp_path):
     assert main(["bench", "--model", "gemma3", "--runs-dir", str(tmp_path)]) == 2
     assert "provider:name" in capsys.readouterr().err
+
+
+def test_bench_survives_a_model_error_and_saves_results(script, tmp_path, capsys):
+    ok = reply({"solution.py": "def is_palindrome(s):\n    t = [c.lower() for c in s if c.isalnum()]\n"
+                               "    return t == t[::-1]\n"})
+    script.replies = [ok, "RAISE:Error code: 401 - Invalid API Key"]
+    runs = str(tmp_path / "runs")
+    code = main(["bench", "--task", "palindrome", "--task", "roman", *COMMON, "--runs-dir", runs])
+    assert code == 0
+    [run_dir] = list(Path(runs).iterdir())
+    rows = {r["task"]: r["status"] for r in csv.DictReader(open(run_dir / "results.csv"))}
+    assert rows == {"palindrome": "passed", "roman": "error"}

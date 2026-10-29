@@ -207,3 +207,37 @@ def test_best_files_are_exactly_what_was_tested(make_task, script, model_spec):
     r = run(task, model_spec)
     assert r.status == "passed"
     assert r.best_files == {"pkg/a.py": "def one():\n    return 1\n"}, "b.py was dropped by the fresh start"
+
+
+def test_model_error_stops_the_task_but_keeps_earlier_attempts(make_task, script, model_spec):
+    script.replies = [reply(BAD), "RAISE:401 invalid api key"]
+    r = run(make_task(ADD_TESTS), model_spec)
+    assert [a.status for a in r.attempts] == ["failed", "error"]
+    assert r.status == "error" and r.best_passed == 1 and "401" in r.attempts[-1].feedback
+
+
+def test_model_error_while_planning(make_task, script, model_spec):
+    script.replies = ["RAISE:401 invalid api key"]
+    r = run(make_task(ADD_TESTS), model_spec, plan_first=True)
+    assert r.status == "error" and len(script.calls) == 1
+
+
+def test_too_large_request_retries_with_shorter_answer(make_task, script):
+    from safe_coding_agent.models import parse_model, register_provider
+
+    from .conftest import ScriptedModel
+    seen = []
+
+    def factory(spec, temperature):
+        seen.append(spec.max_tokens)
+        if spec.max_tokens > 4096:
+            class TooBig(ScriptedModel):
+                def _generate(self, *a, **k):
+                    raise RuntimeError("Error code: 413 - Request too large ... tokens per minute (TPM)")
+            return TooBig()
+        return ScriptedModel()
+
+    register_provider("tiny-tier", factory)
+    script.replies = [reply(GOOD)]
+    r = run(make_task(ADD_TESTS), parse_model("tiny-tier:m", max_tokens=8192))
+    assert r.status == "passed" and seen == [8192, 4096]

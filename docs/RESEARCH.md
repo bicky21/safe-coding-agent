@@ -70,3 +70,66 @@ small local model solve coding tasks, and which loop design helps most?
    - **Repeats still happen:** even with higher retry temperatures, about 28% of retries (10 of 36 per method) were copies of an earlier attempt. Anti-stuck catches them, but they still use up an attempt.
    - **Runs barely vary.** Most tasks score the same in every run, so more runs of the same 6 tasks add little. More (and more varied) tasks would make the comparison stronger than more runs.
 
+
+## Part 2: v1.0, bigger models (29 Oct 2026)
+
+Same agent, now run with `sca` (pytest scoring, 13 built-in tasks = 86 tests, plus the
+multi-file `examples/todo-project` = 13 tests). Big models ran on Groq's free tier;
+Gemma ran locally on a laptop (HP Victus, Ryzen 5 5600H, RX 6500M).
+
+| Model | Where | Task set | Self-checking | First try | Best | Time |
+|-------|-------|----------|---------------|-----------|------|------|
+| gemma3:4b | laptop | todo-project | yes | 11/13 | 11/13 | 1.5 min |
+| gemma3:4b | laptop | todo-project | yes + plan-first | 9/13 | 9/13 | 12.9 min |
+| gpt-oss-20b | Groq | 13 built-in | no | 86/86 | 86/86 | 1.1 min |
+| gpt-oss-20b | Groq | 13 built-in | yes | weekday 7/10, fixed on try 2 | (run stopped, see below) | |
+| qwen3.8-27b | Groq | 13 built-in | no | 86/86 | 86/86 | 2.8 min |
+| qwen3.8-27b | Groq | 13 built-in | yes | 86/86 | 86/86 | 3.7 min |
+| gpt-oss-120b | Groq | todo-project | yes | 13/13 | 13/13 | 4 s |
+| gpt-oss-120b | Groq | 6 tricky | yes | 51/51 | 51/51 | 20 s |
+
+### Findings
+
+10. **The tool works; the small model was the limit.** On the same multi-file task,
+    gemma3:4b got stuck at 11/13 while gpt-oss-120b passed 13/13 on the first try in
+    4 seconds. Gemma's two remaining bugs were simple (a reversed sort key, a missing
+    "nothing pending" case) and stayed even with full test diffs and an explicit
+    "your change fixed nothing" message: a 4B model can write the code but struggles to
+    debug it.
+11. **The benchmark is saturated for models of 20B and up.** Every model from 20B to 120B
+    passed all 86 tests on the first try, including the 6 "tricky" tasks that were built to
+    defeat recall from memory (gemma3:4b reached about 16 of 43 on them). Self-checking had
+    nothing left to fix. To measure self-checking on bigger models, the tasks have to be
+    much harder (larger multi-file projects, stricter specs).
+12. **Self-checking still caught a real mistake on a 20B model.** In the self-checking run,
+    gpt-oss-20b failed 3 of 10 weekday tests on its first try and fixed them on the second.
+    In the run without self-checking the same model passed weekday first time, so a single
+    run hides this kind of variation; repeated runs (`--runs`) are needed for firm numbers.
+13. **Plan-first did not help gemma3:4b on the multi-file task** (9/13 vs 11/13) and took
+    about 8x longer. Gemma wrote a new plan each time but kept returning its previous code,
+    which led to the "fresh start after a repeat" and "stop early" changes.
+14. **Running a local model can overheat a laptop.** A long gemma3:4b run under full CPU/GPU
+    load caused a hardware power-off (no warning in the system log). Cloud models avoid this;
+    locally, use good airflow, `SCA_OLLAMA_NUM_THREAD`, and avoid back-to-back runs.
+
+### Bugs found by these real runs (all fixed)
+
+Testing with real models found problems the scripted tests did not:
+
+- Gemma named files in ways the parser didn't expect, so first answers were thrown away.
+- Unusable answers and repeats used up real attempts (2 of 3 wasted).
+- pytest's short output hid the bug (`['Buy milk', ...]`); tests now run with full diffs.
+- Cosmetic changes that fixed nothing counted as progress; they are now called out.
+- Ollama's default 4096-token context silently cut long prompts; it is now sized per prompt.
+- Groq's free tier (8000 tokens per minute) rejected requests because the reserved answer
+  length counts against the limit (`413`); the agent now retries with a shorter answer limit,
+  and waits as long as the provider asks on rate limits.
+- One model error crashed a whole benchmark and lost all its results; it now marks that
+  task as `error`, carries on, and saves everything.
+
+### Next
+
+- A harder benchmark that big models do not saturate (multi-file projects, larger code).
+- Several runs per setting (`--runs 3`) to separate real effects from run-to-run variation.
+- Mid-size local coding models (e.g. qwen2.5-coder:7b) to find where self-checking stops
+  mattering.

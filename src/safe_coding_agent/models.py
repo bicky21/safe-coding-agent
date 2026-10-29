@@ -13,6 +13,7 @@ Other providers can be added with register_provider().
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -22,6 +23,13 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 class ModelError(RuntimeError):
     """The model can't be created or reached; the message says how to fix it."""
+
+    @property
+    def too_large(self) -> bool:
+        """The request (prompt + reserved answer length) is over a size or tokens-per-minute limit."""
+        text = str(self).lower()
+        return ("413" in text or "request too large" in text or "context_length_exceeded" in text
+                or "maximum context length" in text or "max_tokens" in text and "too" in text)
 
 
 @dataclass(frozen=True)
@@ -196,8 +204,21 @@ _RETRYABLE = ("rate limit", "rate_limit", "overloaded", "429", "500", "502", "50
               "timeout", "timed out", "temporarily", "connection reset", "connection aborted")
 
 
-def invoke_with_retry(model: BaseChatModel, messages, retries: int = 4, base_delay: float = 2.0) -> str:
-    """Call the model; retry temporary failures (rate limits, overload, network) with backoff."""
+def retry_after(text: str) -> float | None:
+    """Seconds to wait, if the error says so ('Please try again in 12.5s', '... in 850ms', '1m30s')."""
+    m = re.search(r"try again in\s+(?:(\d+)m(?!s))?\s*([\d.]+)?\s*(ms|s)?", text, re.IGNORECASE)
+    if not m or not (m.group(1) or m.group(2)):
+        return None
+    minutes = float(m.group(1) or 0)
+    value = float(m.group(2) or 0)
+    seconds = value / 1000 if (m.group(3) or "").lower() == "ms" else value
+    return minutes * 60 + seconds
+
+
+def invoke_with_retry(model: BaseChatModel, messages, retries: int = 4, base_delay: float = 2.0,
+                      max_wait: float = 90.0) -> str:
+    """Call the model; retry temporary failures (rate limits, overload, network) with backoff,
+    waiting as long as the provider asks for when it says so."""
     for attempt in range(retries + 1):
         try:
             return message_text(model.invoke(messages))
@@ -205,5 +226,6 @@ def invoke_with_retry(model: BaseChatModel, messages, retries: int = 4, base_del
             text = f"{type(e).__name__}: {e}".lower()
             if attempt == retries or not any(k in text for k in _RETRYABLE):
                 raise ModelError(f"model call failed: {e}") from e
-            time.sleep(base_delay * (2 ** attempt))
+            wait = retry_after(str(e))
+            time.sleep(min(wait + 0.5 if wait is not None else base_delay * (2 ** attempt), max_wait))
     raise AssertionError("unreachable")
