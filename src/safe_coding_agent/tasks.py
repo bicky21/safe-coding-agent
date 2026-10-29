@@ -30,7 +30,8 @@ from pathlib import Path
 
 import yaml
 
-PROTECTED_NAMES = {"conftest.py", "pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml"}
+PROTECTED_NAMES = {"conftest.py", "pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml",
+                   "_sca_timeout.py"}   # the runner's own per-test time-limit plugin
 
 
 class TaskError(ValueError):
@@ -92,8 +93,9 @@ def _count_tests_in_module(tree: ast.Module) -> int:
     return total
 
 
-def read_tree(root: Path) -> dict[str, str]:
+def read_tree(root: str | os.PathLike) -> dict[str, str]:
     """All text files under root, as {relative/path: content}. Missing root -> {}."""
+    root = Path(root)
     out: dict[str, str] = {}
     if not root.is_dir():
         return out

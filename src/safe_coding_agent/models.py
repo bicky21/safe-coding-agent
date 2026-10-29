@@ -31,6 +31,11 @@ class ModelError(RuntimeError):
         return ("413" in text or "request too large" in text or "context_length_exceeded" in text
                 or "maximum context length" in text or "max_tokens" in text and "too" in text)
 
+    def limit_numbers(self) -> str:
+        """'(limit 8000, requested 9500)' if the provider said so, else ''."""
+        m = re.search(r"limit\D{0,20}(\d+)\D{1,30}requested\D{0,20}(\d+)", str(self), re.IGNORECASE)
+        return f"(limit {m.group(1)}, requested {m.group(2)})" if m else ""
+
     def max_tokens_that_fit(self, current: int) -> int | None:
         """From 'Limit 8000, Requested 8579': the largest answer length that would have fit."""
         m = re.search(r"limit\D{0,20}(\d+)\D{1,30}requested\D{0,20}(\d+)", str(self), re.IGNORECASE)

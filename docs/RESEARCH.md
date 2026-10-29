@@ -143,3 +143,53 @@ Testing with real models found problems the scripted tests did not:
 - Several runs per setting (`--runs 3`) to separate real effects from run-to-run variation.
 - Mid-size local coding models (e.g. qwen2.5-coder:7b) to find where self-checking stops
   mattering.
+
+## Part 3: the hard suite (29 Oct 2026)
+
+`sca bench --suite hard`: 5 project-style tasks, 154 tests (see the README). Groq free tier,
+`--reasoning-effort low`, one run per setting.
+
+| Model | Self-checking | First try | Best | Tasks fully passed |
+|-------|---------------|-----------|------|--------------------|
+| gpt-oss-120b | no | 48/154 * | 48/154 | 1/5 |
+| gpt-oss-120b | yes | 103/154 | **146/154** | **3/5** |
+| gpt-oss-20b | no | 80/154 | 80/154 | 0/5 |
+| gpt-oss-20b | yes | 105/154 | 111/154 | 1/5 |
+
+\* Originally scored 36/154: one hanging test made the whole `recurring-events` run time out and
+score 0/25. Re-scored with the fixed runner (each test now has its own time limit), the same
+code passes 12/25.
+
+### Findings
+
+15. **The hard suite separates the models.** With self-checking, gpt-oss-120b reached 146/154 and
+    gpt-oss-20b 111/154, where on the built-in suite both scored 86/86.
+16. **Self-checking matters much more on hard tasks, and the bigger model gains more.**
+    gpt-oss-120b went from 103 to 146 tests (+43) by fixing its own failures; gpt-oss-20b gained
+    only +6. On the easy suite the gain was about 0.
+17. **First tries are fragile.** The same model scored 48 and 103 on its first tries in two runs.
+    A single broken regex at the top of a file (`redefinition of group name`, `missing )`) made
+    whole tasks fail to import and score 0; one retry fixed it (expression-eval 1/40 -> 38/40).
+    Without self-checking, one bad answer decides the whole result.
+18. **Some bugs survive every retry, even on the 120B model.** In expression-eval, `-2 ** 2`
+    (the spec says -4) and "unexpected end of expression" stayed wrong in all 3 attempts of a run,
+    although the feedback showed `assert 4 == -4` each time. In template-engine, comments,
+    whitespace control and error line numbers failed in every attempt. The 20B model kept the
+    same 2-5 failures per task across all its attempts.
+19. **Fixes can break working code on big models too.** gpt-oss-120b's second expression-eval
+    attempt fixed nothing and broke 3 division tests that had passed (37 -> 34 of 40).
+20. **The smaller model gives up.** gpt-oss-20b answered "I'm sorry, but I can't provide a
+    solution for this task" (or "...goes beyond the scope of this platform") in 8 of its 23
+    answers on the hard suite, all on the two biggest tasks. The agent now recognizes this and
+    answers that the task is doable, instead of repeating format instructions.
+
+### Tool problems found by these runs (fixed)
+
+- A test that hangs made the whole run time out and scored every test as failed. Each test now
+  has its own time limit (a third of the task's timeout, 5-20 s); on a whole-run timeout, tests
+  that already passed still count.
+- Refusals were reported as "no files found"; they now get a reply that the task is doable.
+- On Groq's per-minute token limit the agent kept shrinking the answer length (down to 2851
+  tokens, which guarantees a cut-off answer). It now shrinks once using the provider's numbers;
+  if the request is still too large it waits for the minute's budget instead, and it never goes
+  below 3000 tokens.

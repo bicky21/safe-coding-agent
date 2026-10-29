@@ -18,6 +18,7 @@ Two runners:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -57,7 +58,41 @@ class RunResult:
 
 # ---------------------------------------------------------------- workspace
 
-def build_workspace(task: Task, files: dict[str, str], root: Path) -> Path:
+TIMEOUT_PLUGIN = "_sca_timeout"
+_PLUGIN_CODE = '''"""Per-test time limit (written by safe-coding-agent): a test that hangs fails on its own
+instead of stopping the whole run, so the other tests still count."""
+import signal
+
+import pytest
+
+LIMIT = {limit}
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+    if not hasattr(signal, "SIGALRM"):
+        yield
+        return
+
+    def too_slow(signum, frame):
+        raise TimeoutError(f"this test took longer than {{LIMIT}}s (infinite loop or far too slow?)")
+
+    old = signal.signal(signal.SIGALRM, too_slow)
+    signal.alarm(LIMIT)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+'''
+
+
+def per_test_limit(timeout: int) -> int:
+    """Seconds one test may take: a third of the whole run's time, between 5 and 20 seconds."""
+    return max(5, min(timeout // 3, 20))
+
+
+def build_workspace(task: Task, files: dict[str, str], root: Path, timeout: int | None = None) -> Path:
     """Starter files, then the model's files on top, then the task's tests (always last,
     so the model can never replace them)."""
     ws = root / "workspace"
@@ -79,12 +114,15 @@ def build_workspace(task: Task, files: dict[str, str], root: Path) -> Path:
         task_file = task.path / name
         if task_file.is_file():
             shutil.copy(task_file, ws / name)
+    (ws / f"{TIMEOUT_PLUGIN}.py").write_text(
+        _PLUGIN_CODE.format(limit=per_test_limit(timeout or task.timeout)), encoding="utf-8")
     return ws
 
 
 def pytest_args(report_path: str) -> list[str]:
     # -vv: full assertion diffs (with -q pytest shortens lists to "['a', ...'c']", hiding the bug)
     return ["-m", "pytest", "tests", "-vv", "--tb=short", "--color=no", "-p", "no:cacheprovider",
+            "-p", TIMEOUT_PLUGIN,
             "--continue-on-collection-errors",
             "-o", "console_output_style=classic", "-o", "junit_family=xunit1",
             f"--junitxml={report_path}"]
@@ -177,7 +215,7 @@ class LocalRunner:
     def run(self, task: Task, files: dict[str, str], timeout: int | None = None) -> RunResult:
         timeout = timeout or task.timeout
         with tempfile.TemporaryDirectory(prefix="sca-") as tmp:
-            ws = build_workspace(task, files, Path(tmp))
+            ws = build_workspace(task, files, Path(tmp), timeout)
             report = ws / REPORT
             cmd = [sys.executable, *pytest_args(str(report))]
             kwargs = dict(cwd=ws, env=_clean_env(ws), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -194,13 +232,19 @@ class LocalRunner:
             except subprocess.TimeoutExpired:
                 _kill_group(proc)
                 out, _ = proc.communicate()
-                res = RunResult(total=task.count_tests(), output=out or "", timed_out=True,
-                                runner=self.name)
-                res.output += f"\n\nTIMEOUT: tests did not finish within {timeout}s (infinite loop?)"
-                return res
+                return _timed_out(task, out or "", timeout, self.name)
             res = parse_report(report, out or "", proc.returncode, task)
             res.runner = self.name
             return res
+
+
+def _timed_out(task: Task, output: str, timeout: int, runner: str) -> RunResult:
+    """The whole run hit its time limit: still count the tests that had already passed
+    (pytest -vv prints one 'PASSED' line per test)."""
+    passed = len(re.findall(r"^\S+::\S+ PASSED", output, re.MULTILINE))
+    res = RunResult(passed=passed, total=task.count_tests(), output=output, timed_out=True, runner=runner)
+    res.output += f"\n\nTIMEOUT: tests did not finish within {timeout}s (infinite loop?)"
+    return res
 
 
 def _kill_group(proc: subprocess.Popen) -> None:
@@ -247,7 +291,7 @@ class DockerRunner:
     def run(self, task: Task, files: dict[str, str], timeout: int | None = None) -> RunResult:
         timeout = timeout or task.timeout
         with tempfile.TemporaryDirectory(prefix="sca-") as tmp:
-            ws = build_workspace(task, files, Path(tmp))
+            ws = build_workspace(task, files, Path(tmp), timeout)
             os.chmod(ws, 0o777)
             container = f"sca-{uuid.uuid4().hex[:12]}"
             try:
@@ -258,9 +302,7 @@ class DockerRunner:
             except subprocess.TimeoutExpired as e:
                 subprocess.run([self.docker, "kill", container], capture_output=True)
                 out = e.stdout if isinstance(e.stdout, str) else (e.stdout or b"").decode(errors="replace")
-                res = RunResult(total=task.count_tests(), output=out, timed_out=True, runner=self.name)
-                res.output += f"\n\nTIMEOUT: tests did not finish within {timeout}s (infinite loop?)"
-                return res
+                return _timed_out(task, out, timeout, self.name)
             if proc.returncode == 125 or "Unable to find image" in proc.stdout:
                 raise SandboxError(f"Docker could not start the sandbox:\n{proc.stdout.strip()[-800:]}\n"
                                    "Build the sandbox image with:  sca sandbox build")

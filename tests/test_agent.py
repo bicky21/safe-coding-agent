@@ -257,3 +257,55 @@ def test_cut_off_answer_gets_a_clear_message(make_task, script, model_spec):
     assert [a.status for a in r.attempts] == ["invalid", "passed"]
     assert "cut off at the maximum length" in r.attempts[0].feedback
     assert "Keep it SHORT" in script.calls[1]["prompt"]
+
+
+def test_giving_up_gets_encouragement_not_format_help(make_task, script, model_spec):
+    script.replies = ["I’m sorry, but I can’t provide a solution for this task.", reply(GOOD)]
+    r = run(make_task(ADD_TESTS), model_spec)
+    assert [a.status for a in r.attempts] == ["invalid", "passed"]
+    assert "gave up" in r.attempts[0].feedback or "IS doable" in r.attempts[0].feedback
+    assert "This task IS doable" in script.calls[1]["prompt"]
+
+
+def _too_large_provider(name, fail_times, script):
+    """A provider whose first `fail_times` calls are rejected as too large for a per-minute limit."""
+    from safe_coding_agent.models import register_provider
+
+    from .conftest import ScriptedModel
+    seen = []
+
+    def factory(spec, temperature):
+        seen.append(spec.max_tokens)
+        if len(seen) <= fail_times:
+            class TooBig(ScriptedModel):
+                def _generate(self, *a, **k):
+                    raise RuntimeError("Error code: 413 - Request too large for model on tokens per minute "
+                                       "(TPM): Limit 8000, Requested 9000, please reduce your message size")
+            return TooBig()
+        return ScriptedModel()
+
+    register_provider(name, factory)
+    return seen
+
+
+def test_too_large_shrinks_once_then_waits(make_task, script, monkeypatch):
+    from safe_coding_agent import agent as agent_mod
+    from safe_coding_agent.models import parse_model
+    waits = []
+    monkeypatch.setattr(agent_mod.time, "sleep", waits.append)
+    seen = _too_large_provider("tpm-wait", 2, script)
+    script.replies = [reply(GOOD)]
+    r = run(make_task(ADD_TESTS), parse_model("tpm-wait:m", max_tokens=8192))
+    assert r.status == "passed"
+    assert seen == [8192, 8192 - 1000 - 200, 8192 - 1000 - 200]     # shrink once, then wait at the same size
+    assert len(waits) == 1
+
+
+def test_too_large_never_shrinks_below_a_useful_answer(make_task, script, monkeypatch):
+    from safe_coding_agent import agent as agent_mod
+    from safe_coding_agent.models import parse_model
+    monkeypatch.setattr(agent_mod.time, "sleep", lambda s: None)
+    _too_large_provider("tpm-hopeless", 100, script)
+    r = run(make_task(ADD_TESTS), parse_model("tpm-hopeless:m", max_tokens=8192))
+    assert r.status == "error"
+    assert "no room for a full answer" in r.attempts[-1].feedback

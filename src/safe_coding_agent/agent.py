@@ -20,7 +20,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from . import prompts
-from .models import REPLY_RESERVE, ModelError, ModelSpec, context_for, invoke_with_retry, make_model
+from .models import REPLY_RESERVE, ModelError, ModelSpec, context_for, invoke_with_retry, make_model, retry_after
 from .safety import check_files
 from .sandbox import RunResult
 from .tasks import Task
@@ -81,6 +81,7 @@ class Attempt:
 
 
 REAL = ("passed", "failed", "blocked")      # attempt kinds that use up one of max_attempts
+MIN_ANSWER_TOKENS = 3000                    # below this a code answer is almost always cut off
 REPLY_LIMIT = 20_000
 
 
@@ -117,6 +118,7 @@ class CodingAgent:
                 self.say(f"WARNING: prompt (~{len(prompt) // 3} tokens) is bigger than the Ollama context "
                          f"limit ({num_ctx}); Ollama will cut it. Raise SCA_OLLAMA_MAX_CTX or lower --context-chars")
             spec = replace(spec, num_ctx=num_ctx)
+        shrunk = waited = 0
         while True:
             model = make_model(spec, self.s.temperature(attempt))
             info: dict = {}
@@ -126,15 +128,29 @@ class CodingAgent:
                 self._answer_limit = spec.max_tokens
                 return text
             except ModelError as e:
-                # free tiers count prompt + the reserved answer length against a small limit
-                # (e.g. Groq: 8000 tokens per minute): ask for a shorter answer and try again
-                if not e.too_large or spec.max_tokens <= 1024:
+                # Free tiers count prompt + reserved answer length against a small per-minute limit
+                # (Groq: 8000 tokens/minute). First shrink the answer length to what fits. If it is
+                # STILL too large, the minute's budget is being used up by earlier calls: wait for it
+                # instead of shrinking further (a too-short answer limit just cuts the code off).
+                if not e.too_large:
                     raise
+                numbers = e.limit_numbers()
+                if shrunk and waited < 2:
+                    waited += 1
+                    pause = retry_after(str(e)) or 30.0
+                    self.say(f"request too large again {numbers}; waiting {pause:.0f}s for the provider's "
+                             "per-minute limit")
+                    time.sleep(min(pause + 1, 65))
+                    continue
                 fit = e.max_tokens_that_fit(spec.max_tokens)
-                new = fit if fit and 1024 <= fit < spec.max_tokens else spec.max_tokens // 2
-                spec = replace(spec, max_tokens=max(new, 1024))
-                self.say(f"request too large for the provider; retrying with max answer length "
-                         f"{spec.max_tokens} tokens")
+                new = fit if fit and fit < spec.max_tokens else spec.max_tokens // 2
+                if new < MIN_ANSWER_TOKENS:
+                    raise ModelError(f"the provider's size limit leaves no room for a full answer {numbers}. "
+                                     "Use a model or plan with a bigger limit, or lower --context-chars.") from e
+                shrunk += 1
+                waited = 0
+                spec = replace(spec, max_tokens=new)
+                self.say(f"request too large {numbers}; retrying with max answer length {new} tokens")
 
     def _n(self, state: State) -> int:
         return len(state.get("attempts", []))
@@ -186,8 +202,13 @@ class CodingAgent:
         if self._cut_off and (problems and not files):
             problems = [f"it was cut off at the maximum length ({self._answer_limit} tokens) before the code "
                         "was complete"]
+        refused = not files and not self._cut_off and prompts.gave_up(reply)
+        if refused:
+            problems = ["no code - the model gave up on the task"]
         if problems and not files:
             fb = ("Your answer could not be used: " + "; ".join(problems) + ".\n\n" + prompts.OUTPUT_FORMAT)
+            if refused:
+                fb = prompts.GIVE_IT_A_GO + "\n\n" + prompts.OUTPUT_FORMAT
             if self._cut_off:
                 fb += ("\n\nYour answer was too long. Keep it SHORT: think briefly, write no explanations "
                        "or comments, and return only the FILE blocks.")

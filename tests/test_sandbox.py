@@ -108,3 +108,37 @@ def test_full_assertion_diff_is_shown(make_task):
                                                 "'walk dog', 'pay bills', 'write report']\n"})
     assert "['buy milk', 'call mom', 'walk dog', 'pay bills', 'write report']" in r.output
     assert "generated xml file" not in summarize_output(r.output)
+
+
+def test_one_hanging_test_fails_alone(make_task):
+    task = load_task(make_task("""
+        from solution import fast, slow
+        def test_fast():
+            assert fast() == 1
+        def test_slow():
+            assert slow() == 2
+        def test_fast_again():
+            assert fast() == 1
+    """, timeout=30))
+    code = "def fast():\n    return 1\n\ndef slow():\n    while True:\n        pass\n"
+    r = LocalRunner().run(task, {"solution.py": code})
+    assert (r.passed, r.total, r.timed_out) == (2, 3, False)
+    assert "longer than" in r.failures[0].message
+
+
+def test_whole_run_timeout_still_counts_passed_tests(make_task):
+    task = load_task(make_task("""
+        import time
+        from solution import ok
+        def test_a():
+            assert ok()
+        def test_b():
+            time.sleep(30)
+    """, timeout=3))
+    r = LocalRunner().run(task, {"solution.py": "def ok():\n    return True\n"})
+    assert r.timed_out and (r.passed, r.total) == (1, 2)
+
+
+def test_model_cannot_replace_the_timeout_plugin():
+    from safe_coding_agent.tasks import unsafe_path_reason
+    assert unsafe_path_reason("_sca_timeout.py") is not None

@@ -112,6 +112,19 @@ def feedback_text(res: RunResult, mode: str) -> str:
     return head + "\n" + summarize_output(res.output)
 
 
+_GAVE_UP = re.compile(r"\b(sorry|can['’]?t|cannot|unable|not able|too (?:complex|long|big)|beyond the scope)\b",
+                      re.IGNORECASE)
+
+GIVE_IT_A_GO = ("You did not write any code. This task IS doable: a complete solution is usually 100-300 lines, "
+                "and it does not have to be perfect - you will get the test results and can fix it after. "
+                "Write your best complete version now.")
+
+
+def gave_up(reply: str) -> bool:
+    """A short reply without any code that declines the task ("I'm sorry, but I can't...")."""
+    return "```" not in reply and len(reply) < 2000 and bool(_GAVE_UP.search(reply))
+
+
 def first_line(text: str) -> str:
     for line in text.splitlines():
         if line.strip() and not line.startswith("="):
