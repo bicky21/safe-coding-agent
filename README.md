@@ -146,6 +146,20 @@ Then run `python analyze.py` to see, for every task, each attempt's error and wh
    - **Steps miss rules:** rle's plan listed the split-at-9 rule and even the right example output (`9aa`), but its STEPS never did the splitting, so the code didn't either.
    - **Code ignores the plan:** duration's plan said to split on the unit letters, but the code still split on spaces into 4 parts, the same wrong idea as every earlier run. Spiral's code still went right first, the famous version.
    A small model (4B) can write a reasonable plan, but doesn't reliably compute examples or follow its own plan.
+9. **Fair comparison, 3+ runs per method (v0.5, partial-credit scores, 43 tests on the tricky tasks).**
+
+   | Method | Runs | First try | Best (avg) | Best range | Time per run |
+   |--------|------|-----------|------------|------------|--------------|
+   | Plan-first + anti-stuck, detailed | 4 | **14/43** | **18.8/43** | 18-21 | ~13 min |
+   | Anti-stuck, detailed feedback | 4 | 11/43 | 16.5/43 | 15-18 | ~3.3 min |
+   | Anti-stuck, simple feedback | 3 | 11/43 | 15.0/43 | 15-15 | ~3.6 min |
+
+   - **Self-checking always helps:** every method gains +4 to +8 tests over its first try.
+   - **Plan-first scores best and is the only method that improves the first try** (14 vs 11). Its worst run (18) equals the other methods' best run, so the gain is consistent, but small (+2.3 tests) and it costs ~4x the time.
+   - **The gain is uneven:** plan-first helps a lot on rle (5 vs 3 of 8) and weekday (5 vs 1-4 of 8), but hurts wrap (2 vs 4 of 7). duration is stuck at 1/6 for every method.
+   - **Detailed vs simple feedback:** 16.5 vs 15.0, a small difference.
+   - **Repeats still happen:** even with higher retry temperatures, about 28% of retries (10 of 36 per method) were copies of an earlier attempt. Anti-stuck catches them, but they still use up an attempt.
+   - **Runs barely vary.** Most tasks score the same in every run, so more runs of the same 6 tasks add little. More (and more varied) tasks would make the comparison stronger than more runs.
 
 ## Roadmap
 
