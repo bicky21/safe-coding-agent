@@ -74,6 +74,7 @@ class Attempt:
     violations: list[str] = field(default_factory=list)
     reply: str = ""                  # the model's raw answer (kept for debugging)
     failure_signature: tuple = ()    # which tests failed and how (to spot changes that fix nothing)
+    tested_files: dict[str, str] = field(default_factory=dict)   # every model file in the tested workspace
 
     def to_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -167,10 +168,14 @@ class CodingAgent:
             if a.status in ("invalid",):
                 continue
             if a.files and {**state.get("files", {}), **a.files} == merged and a.files == state["new_files"]:
-                self.say(f"attempt {self._n(state) + 1}: same code as attempt {a.number} - not counted, retrying")
+                self.say(f"attempt {self._n(state) + 1}: same code as attempt {a.number} - not counted, "
+                         "starting over from the original code")
                 fb = (f"You returned EXACTLY the same code as attempt {a.number}, which already failed:\n"
-                      f"{a.feedback}\n\nDo not repeat it. Rethink the approach and write a DIFFERENT solution.")
-                return self._record(state, "repeat", fb, passed=a.passed, total=a.total)
+                      f"{a.feedback}\n\nDo not repeat it. STARTING OVER: the project files above are the ORIGINAL "
+                      "starter code again, without your earlier changes. Write the solution again from scratch, "
+                      "with a DIFFERENT approach, and make sure it fixes the failures listed.")
+                # fresh start: the model's failed versions are no longer shown, so it can't copy them again
+                return {**self._record(state, "repeat", fb, passed=a.passed, total=a.total), "files": {}}
         return {}
 
     def check_safety(self, state: State) -> dict:
@@ -201,7 +206,7 @@ class CodingAgent:
                       "not help. Read each error below, find the exact line it points to, and change THAT logic.\n\n"
                       + fb)
         out = self._record(state, status, fb or "all tests passed", passed=res.passed, total=res.total,
-                           failure_signature=_failure_signature(res))
+                           failure_signature=_failure_signature(res), tested_files=files)
         out["files"] = files
         return out
 
@@ -224,6 +229,11 @@ class CodingAgent:
         real = sum(a.status in REAL for a in attempts)
         if state.get("status") == "passed" or real >= self.s.max_attempts \
                 or len(attempts) >= 2 * self.s.max_attempts:
+            return "done"
+        last = [a.status for a in attempts[-3:]]
+        if last[-2:] == ["repeat", "repeat"] or (len(last) == 3 and set(last) <= {"repeat", "invalid"}):
+            # even a fresh start didn't help: more tries would only cost time (and heat)
+            self.say("stopping early: the model keeps repeating itself or giving unusable answers")
             return "done"
         return "retry"
 
@@ -289,7 +299,7 @@ class TaskResult:
             status = "failed"
         first = attempts[0].passed if attempts else 0
         return cls(task.name, task.level, status, attempts, round(seconds, 1), first,
-                   best.passed if best else 0, total, _merged_files(attempts, best))
+                   best.passed if best else 0, total, dict(best.tested_files) if best else {})
 
     @property
     def repeats(self) -> int:
@@ -306,16 +316,3 @@ def _failure_signature(res: RunResult) -> tuple:
         first = (msg or "").strip().splitlines()[0] if msg and msg.strip() else ""
         return re.sub(r"(line \d+|:\d+:|/tmp/\S+)", "", first)[:200]
     return tuple(sorted((f.name, norm(f.message)) for f in res.failures))
-
-
-def _merged_files(attempts: list[Attempt], upto: Attempt | None) -> dict[str, str]:
-    """The full set of files as they were when the best attempt was tested."""
-    files: dict[str, str] = {}
-    if upto is None:
-        return files
-    for a in attempts:
-        if a.status in ("passed", "failed"):
-            files.update(a.files)
-        if a is upto:
-            break
-    return files

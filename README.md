@@ -167,7 +167,7 @@ Each result reports tests passed on the **first try** (= without self-checking) 
 | `--max-attempts N` | real tries per task (1 = no self-checking). Answers that can't be used and exact repeats don't count, up to 2x N model calls |
 | `--plan` | plan first: rules, hand-worked examples, steps; failures fix the plan |
 | `--feedback detailed/simple` | full pytest failure output, or failing test names only |
-| `--no-anti-stuck` | don't catch repeated code; keep temperature 0 on retries |
+| `--no-anti-stuck` | turn off the anti-stuck help: by default a repeated answer makes the model start over from the original code, a change that fixes nothing is called out, temperature rises on retries, and the run stops early when the model keeps repeating itself |
 | `--safety` | override every task's safety level |
 | `--runs N` / `--jobs N` | repeat N times / run N tasks in parallel |
 

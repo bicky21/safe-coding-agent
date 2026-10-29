@@ -134,10 +134,17 @@ def test_invalid_and_repeat_do_not_use_up_attempts(make_task, script, model_spec
     assert r.status == "passed"
 
 
-def test_wasted_attempts_are_capped(make_task, script, model_spec):
+def test_unusable_answers_stop_early(make_task, script, model_spec):
     script.replies = ["no code"] * 10
-    r = run(make_task(ADD_TESTS), model_spec, max_attempts=2)
-    assert len(r.attempts) == 4 and r.status == "failed"   # at most 2x max_attempts model calls
+    r = run(make_task(ADD_TESTS), model_spec, max_attempts=5)
+    assert len(r.attempts) == 3 and r.status == "failed"   # 3 unusable answers in a row: give up
+
+
+def test_model_calls_are_capped(make_task, script, model_spec):
+    other = {"solution.py": "def add(a, b):\n    return 0\n"}
+    script.replies = ["no code", reply(BAD), "no code", reply(other), "no code", "no code"]
+    r = run(make_task(ADD_TESTS), model_spec, max_attempts=3)
+    assert len(r.attempts) <= 6
 
 
 def test_raw_reply_is_kept(make_task, script, model_spec):
@@ -167,3 +174,36 @@ def test_ollama_gets_a_context_window_that_fits(make_task, script, monkeypatch):
     CodingAgent(load_task(make_task(ADD_TESTS, starter=big)), Settings(model=parse_model("ollama:fake")),
                 LocalRunner()).run()
     assert seen and seen[0] >= 8192
+
+
+def test_repeat_triggers_a_fresh_start(make_task, script, model_spec):
+    starter = {"lib/helper.py": "HELPER = 1\n"}
+    script.replies = [reply(BAD), reply(BAD), reply(GOOD)]
+    r = run(make_task(ADD_TESTS, starter=starter), model_spec)
+    assert [a.status for a in r.attempts] == ["failed", "repeat", "passed"]
+    after_repeat = script.calls[2]["prompt"]
+    assert "STARTING OVER" in after_repeat
+    assert "return a - b" not in after_repeat.split("Your previous attempt failed")[0], \
+        "the failed code must not be shown again as the current project"
+    assert "FILE: lib/helper.py" in after_repeat
+
+
+def test_two_repeats_in_a_row_stop_early(make_task, script, model_spec):
+    script.replies = [reply(BAD), reply(BAD), reply(BAD), reply(GOOD)]
+    r = run(make_task(ADD_TESTS), model_spec, max_attempts=3)
+    assert [a.status for a in r.attempts] == ["failed", "repeat", "repeat"]
+    assert len(script.calls) == 3
+
+
+def test_best_files_are_exactly_what_was_tested(make_task, script, model_spec):
+    tests = """
+        from pkg.a import one
+        def test_one():
+            assert one() == 1
+    """
+    task = make_task(tests, files="[pkg/a.py, pkg/b.py]", starter={"pkg/__init__.py": ""})
+    first = {"pkg/a.py": "def one():\n    return 2\n", "pkg/b.py": "OLD = 1\n"}
+    script.replies = [reply(first), reply(first), reply({"pkg/a.py": "def one():\n    return 1\n"})]
+    r = run(task, model_spec)
+    assert r.status == "passed"
+    assert r.best_files == {"pkg/a.py": "def one():\n    return 1\n"}, "b.py was dropped by the fresh start"
