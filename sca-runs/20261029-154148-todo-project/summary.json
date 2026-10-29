@@ -1,0 +1,29 @@
+{
+  "version": "1.0.0",
+  "created": "2026-10-29 15:41:48",
+  "settings": {
+    "model": "ollama:gemma3:4b",
+    "max_attempts": 3,
+    "feedback": "detailed",
+    "anti_stuck": true,
+    "plan_first": false,
+    "safety": "task default"
+  },
+  "suite": "/home/bicky/Desktop/safe-coding-agent/safe-coding-agent/examples/todo-project",
+  "runner": "local",
+  "tasks": [
+    "todo-project"
+  ],
+  "runs": [
+    {
+      "tasks": 1,
+      "tasks_passed": 0,
+      "tests_total": 13,
+      "tests_first": 11,
+      "tests_best": 11,
+      "repeats": 2,
+      "blocked": 0,
+      "seconds": 130.6
+    }
+  ]
+}
