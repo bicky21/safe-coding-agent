@@ -84,3 +84,28 @@ def test_ollama_num_thread_from_env(monkeypatch):
     from safe_coding_agent.models import make_model
     monkeypatch.setenv("SCA_OLLAMA_NUM_THREAD", "4")
     assert make_model(parse_model("ollama:qwen2.5-coder:7b"), 0.0).num_thread == 4
+
+
+@pytest.mark.parametrize("value, message", [(None, "is not set"), ("", "is empty"), (" gsk_x", "space")])
+def test_preflight_catches_bad_api_keys(monkeypatch, value, message):
+    from safe_coding_agent.models import preflight
+    if value is None:
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("GROQ_API_KEY", value)
+    spec = parse_model("openai:llama-3.3-70b-versatile", base_url="https://api.groq.com/openai/v1",
+                       api_key_env="GROQ_API_KEY")
+    with pytest.raises(ModelError, match=message):
+        preflight(spec)
+
+
+def test_preflight_local_openai_server_needs_no_key(monkeypatch):
+    from safe_coding_agent.models import preflight
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    preflight(parse_model("openai:local-model", base_url="http://localhost:1234/v1"))   # no error
+
+
+def test_preflight_good_key(monkeypatch):
+    from safe_coding_agent.models import preflight
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
+    preflight(parse_model("openai:x", base_url="https://api.groq.com/openai/v1", api_key_env="GROQ_API_KEY"))

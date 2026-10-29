@@ -152,15 +152,28 @@ def preflight(spec: ModelSpec) -> None:
             raise ModelError(f"can't reach Ollama ({e}).\nFix:  start it with: ollama serve") from e
     elif spec.provider == "anthropic":
         key = spec.api_key_env or "ANTHROPIC_API_KEY"
-        if not os.environ.get(key):
-            raise ModelError(f"set your Anthropic API key first:  export {key}=sk-ant-...")
+        _check_key(key, required=True, example="sk-ant-...")
         make_model(spec, 0.0)
     elif spec.provider == "openai":
         key = spec.api_key_env or "OPENAI_API_KEY"
-        if not os.environ.get(key) and not (spec.base_url or os.environ.get("OPENAI_BASE_URL")):
-            raise ModelError(f"set your API key first:  export {key}=...   "
-                             "(or pass --base-url for a local OpenAI-compatible server)")
+        # a local server (--base-url without --api-key-env) may need no key at all
+        local = bool(spec.base_url or os.environ.get("OPENAI_BASE_URL")) and not spec.api_key_env
+        _check_key(key, required=not local, example="...")
         make_model(spec, 0.0)
+
+
+def _check_key(name: str, required: bool, example: str) -> None:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        if not required:
+            return
+        state = "is empty" if value == "" else "is not set"
+        raise ModelError(f"{name} {state}. Set it with no spaces around '=':\n"
+                         f"    export {name}={example}\n"
+                         f"Check it with:  echo ${{{name}:0:8}}")
+    if value != value.strip():
+        raise ModelError(f"{name} starts or ends with a space. Set it again with no spaces around '=':\n"
+                         f"    export {name}={example}")
 
 
 def message_text(message) -> str:
