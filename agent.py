@@ -1,5 +1,5 @@
 """
-Self-Checking, Safe Coding Agent (v0.1.1)
+Self-Checking, Safe Coding Agent (v0.1.2)
 
 Usage:
   python agent.py                     # run all tasks in tasks.py
@@ -211,7 +211,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Self-checking safe coding agent")
     parser.add_argument("--task", help="run only this task (e.g. roman). Default: all tasks")
-    parser.add_argument("--level", choices=["easy", "medium", "hard"], help="run only this level")
+    parser.add_argument("--level", choices=["easy", "medium", "hard", "tricky"], help="run only this level")
     parser.add_argument("--max-attempts", type=int, default=MAX_ATTEMPTS,
                         help="tries per task (use 1 to switch self-checking off)")
     parser.add_argument("--show-code", action="store_true", help="print the final code of each task")

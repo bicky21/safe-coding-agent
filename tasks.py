@@ -128,4 +128,141 @@ assert c.get(4) == -1
 assert c.get(3) == 30
 """,
     },
+    # ------------------------------------------------------------------
+    # "tricky" tasks: unusual rules the model has NOT seen thousands of
+    # times in training, so it cannot just recall a famous answer.
+    # ------------------------------------------------------------------
+    {
+        "name": "rle",
+        "level": "tricky",
+        "task": (
+            "Write a function compress(s: str) -> str using run-length encoding with these "
+            "exact rules: each run of the same character is written as <count><char>; the "
+            "count is left out when it is 1; a run longer than 9 is split into chunks of at "
+            "most 9 (so 'a'*12 becomes '9a3a' and 'a'*10 becomes '9aa')."
+        ),
+        "tests": """
+assert compress("") == ""
+assert compress("abc") == "abc"
+assert compress("aaabcc") == "3ab2c"
+assert compress("aabbbaa") == "2a3b2a"
+assert compress("a" * 9) == "9a"
+assert compress("a" * 10) == "9aa"
+assert compress("a" * 12) == "9a3a"
+assert compress("x" * 19 + "y") == "9x9xxy"
+""",
+    },
+    {
+        "name": "duration",
+        "level": "tricky",
+        "task": (
+            "Write a function parse_duration(s: str) -> int that converts a duration like "
+            "'1h30m' into total seconds. Units are d, h, m, s (case-insensitive). Each unit "
+            "may appear at most once and only in the order d, h, m, s. Spaces between parts "
+            "are allowed. Raise ValueError for anything invalid, including an empty string, "
+            "a number without a unit, a unit without a number, wrong order, or repeated units."
+        ),
+        "tests": """
+assert parse_duration("1h30m") == 5400
+assert parse_duration("2d") == 172800
+assert parse_duration("1D 2H 3M 4S") == 93784
+assert parse_duration("45s") == 45
+assert parse_duration("0m") == 0
+for bad in ["", "10", "h", "1x", "1m1h", "1h1h", "1h 30"]:
+    try:
+        parse_duration(bad)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(f"expected ValueError for {bad!r}")
+""",
+    },
+    {
+        "name": "spiral",
+        "level": "tricky",
+        "task": (
+            "Write a function spiral_ccw(n: int) -> list[list[int]] that returns an n x n "
+            "matrix filled with 1..n*n in a COUNTER-clockwise spiral: start at the top-left "
+            "corner, go DOWN first, then right, then up, then left, moving inward. "
+            "spiral_ccw(0) returns []."
+        ),
+        "tests": """
+assert spiral_ccw(0) == []
+assert spiral_ccw(1) == [[1]]
+assert spiral_ccw(2) == [[1, 4], [2, 3]]
+assert spiral_ccw(3) == [[1, 8, 7], [2, 9, 6], [3, 4, 5]]
+assert spiral_ccw(4) == [[1, 12, 11, 10], [2, 13, 16, 9], [3, 14, 15, 8], [4, 5, 6, 7]]
+""",
+    },
+    {
+        "name": "version",
+        "level": "tricky",
+        "task": (
+            "Write a function compare_versions(a: str, b: str) -> int that returns -1 if a < b, "
+            "0 if equal, 1 if a > b. Rules: versions are dot-separated numbers compared as "
+            "integers ('1.10' > '1.9'); missing parts count as 0 ('1.0' == '1'); a version may "
+            "end with '-<label>' (pre-release), which makes it LOWER than the same version "
+            "without a label ('1.0-beta' < '1.0'); two labels are compared alphabetically "
+            "('1.0-alpha' < '1.0-beta'). Numbers are compared before labels."
+        ),
+        "tests": """
+assert compare_versions("1.0", "1") == 0
+assert compare_versions("1.10", "1.9") == 1
+assert compare_versions("1.2.3", "1.2.10") == -1
+assert compare_versions("2", "1.99.99") == 1
+assert compare_versions("1.0-beta", "1.0") == -1
+assert compare_versions("1.0", "1.0-rc") == 1
+assert compare_versions("1.0-alpha", "1.0-beta") == -1
+assert compare_versions("1.0.0-beta", "1-beta") == 0
+assert compare_versions("1.1-alpha", "1.0") == 1
+""",
+    },
+    {
+        "name": "wrap",
+        "level": "tricky",
+        "task": (
+            "Write a function wrap_text(text: str, width: int) -> list[str] that splits text on "
+            "any whitespace into words and packs them greedily into lines of at most width "
+            "characters, with words joined by one space. A word longer than width is cut into "
+            "pieces of exactly width characters, each piece on its own line, except the last "
+            "(shorter or equal) piece, which starts a new line that later words may join. "
+            "Empty or whitespace-only text returns []."
+        ),
+        "tests": """
+assert wrap_text("", 5) == []
+assert wrap_text("   ", 5) == []
+assert wrap_text("the quick brown fox", 10) == ["the quick", "brown fox"]
+assert wrap_text("a  b\\nc", 3) == ["a b", "c"]
+assert wrap_text("abcdefghijkl xy", 5) == ["abcde", "fghij", "kl xy"]
+assert wrap_text("supercalifragilistic is long", 8) == ["supercal", "ifragili", "stic is", "long"]
+assert wrap_text("hi abcdef", 3) == ["hi", "abc", "def"]
+""",
+    },
+    {
+        "name": "weekday",
+        "level": "tricky",
+        "task": (
+            "Write a function nth_weekday(year: int, month: int, weekday: int, n: int) -> int "
+            "that returns the day of the month of the n-th given weekday (0=Monday ... "
+            "6=Sunday). n=1 is the first, n=2 the second, n=-1 the last, n=-2 the second last. "
+            "Raise ValueError if n is 0 or that occurrence does not exist. You may use the "
+            "calendar or datetime modules."
+        ),
+        "tests": """
+assert nth_weekday(2026, 10, 3, 1) == 1     # first Thursday of Oct 2026
+assert nth_weekday(2026, 10, 3, 2) == 8
+assert nth_weekday(2026, 10, 3, -1) == 29   # last Thursday
+assert nth_weekday(2026, 10, 3, 5) == 29
+assert nth_weekday(2024, 2, 3, -1) == 29    # leap year
+assert nth_weekday(2026, 2, 0, 1) == 2
+assert nth_weekday(2026, 2, 0, -1) == 23
+for args in [(2026, 2, 0, 5), (2026, 10, 3, 0), (2026, 10, 3, -6)]:
+    try:
+        nth_weekday(*args)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(f"expected ValueError for {args}")
+""",
+    },
 ]

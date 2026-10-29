@@ -38,12 +38,15 @@ To use a different model: `AGENT_MODEL=gemma3:12b python agent.py`
 
 ## Running the benchmark
 
-`tasks.py` has 7 tasks (easy, medium, hard). Each has tests the code must pass.
+`tasks.py` has 13 tasks. Each has tests the code must pass.
+
+- **easy / medium / hard** (7 tasks): famous problems like LCS, Dijkstra and LRU cache. Models have seen these many times in training, so they mostly recall the answer (this is called *data contamination*).
+- **tricky** (6 tasks): problems with unusual, exact rules (custom run-length encoding, a counter-clockwise spiral, version strings with pre-release labels...). The model can't copy a famous answer, so these show whether self-checking really helps.
 
 ```bash
 python agent.py                     # run all tasks
 python agent.py --task roman        # run one task
-python agent.py --level hard        # run only hard tasks
+python agent.py --level tricky      # run only the tricky tasks
 python agent.py --max-attempts 1    # self-checking OFF (for comparison)
 python agent.py --show-code         # also print the final code
 python agent.py --list              # list task names
@@ -57,6 +60,7 @@ At the end you get a summary table, and the results are saved in `results/` as a
 
 - [x] v0.1 Write -> safety check -> test -> retry loop
 - [x] v0.1.1 Benchmark of 7 tasks, summary table, CSV results
+- [x] v0.1.2 6 "tricky" tasks with unusual rules (to avoid data contamination)
 - [ ] v0.2 Replace regex safety check with Python AST checks
 - [ ] v0.3 Run tests inside Docker (real sandbox)
 - [ ] v0.4 Human-in-the-loop approval for risky actions (LangGraph `interrupt`)
