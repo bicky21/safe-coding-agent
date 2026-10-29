@@ -58,8 +58,10 @@ export OPENAI_API_KEY=sk-...
 sca run my-task --model openai:gpt-4o-mini
 
 export GROQ_API_KEY=gsk_...                                    # any OpenAI-compatible API
-sca run my-task --model openai:llama-3.3-70b-versatile \
+sca run my-task --model openai:openai/gpt-oss-120b \
     --base-url https://api.groq.com/openai/v1 --api-key-env GROQ_API_KEY
+# see which models your key can use:
+#   curl -s https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY"
 
 sca run my-task --model openai:local-model --base-url http://localhost:1234/v1   # LM Studio
 ```
