@@ -1,0 +1,30 @@
+{
+  "interrupted": false,
+  "version": "1.0.0",
+  "created": "2026-10-29 17:04:01",
+  "settings": {
+    "model": "openai:openai/gpt-oss-120b",
+    "max_attempts": 3,
+    "feedback": "detailed",
+    "anti_stuck": true,
+    "plan_first": false,
+    "safety": "task default"
+  },
+  "suite": "hard",
+  "runner": "local",
+  "tasks": [
+    "expression-eval"
+  ],
+  "runs": [
+    {
+      "tasks": 1,
+      "tasks_passed": 0,
+      "tests_total": 40,
+      "tests_first": 37,
+      "tests_best": 38,
+      "repeats": 0,
+      "blocked": 0,
+      "seconds": 70.8
+    }
+  ]
+}
