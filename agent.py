@@ -1,5 +1,5 @@
 """
-Self-Checking, Safe Coding Agent (v0.4)
+Self-Checking, Safe Coding Agent (v0.5)
 
 Usage:
   python agent.py                     # run all tasks in tasks.py
@@ -9,6 +9,7 @@ Usage:
   python agent.py --feedback simple   # raw Python errors only (for comparison)
   python agent.py --no-anti-stuck     # allow repeated code, temperature 0 (old behaviour)
   python agent.py --plan              # plan first (rules, worked examples, steps), then code
+  python agent.py --runs 3            # repeat everything 3 times, then show the average
   python agent.py --list              # show task names
 
 What it does:
@@ -258,6 +259,93 @@ except Exception:
 '''
 
 
+# Scorer: counts how many tests a piece of code passes (partial credit), so a task that
+# passes 5 of 8 tests is not scored the same as one that passes 0.
+# Each top-level `assert` is one test; a loop/try block that contains asserts or raises
+# is one test; other lines (like c.put(1, 1)) are setup and always run, in order.
+SCORER = r'''
+import ast, json, signal, sys
+
+def is_test(n):
+    if isinstance(n, ast.Assert):
+        return True
+    return isinstance(n, (ast.For, ast.While, ast.If, ast.Try, ast.With)) and any(
+        isinstance(x, (ast.Assert, ast.Raise)) for x in ast.walk(n))
+
+tree = ast.parse(open("tests.py", encoding="utf-8").read())
+total = sum(is_test(n) for n in tree.body)
+passed = 0
+print(json.dumps({"passed": 0, "total": total}), flush=True)
+
+def _timeout(*_):
+    raise TimeoutError()
+if hasattr(signal, "SIGALRM"):
+    signal.signal(signal.SIGALRM, _timeout)
+
+def run(node_list, ns):
+    if hasattr(signal, "SIGALRM"):
+        signal.alarm(3)
+    try:
+        exec(compile(ast.Module(body=node_list, type_ignores=[]), "tests.py", "exec"), ns)
+    finally:
+        if hasattr(signal, "SIGALRM"):
+            signal.alarm(0)
+
+ns = {}
+try:
+    if hasattr(signal, "SIGALRM"):
+        signal.alarm(3)
+    exec(compile(open("solution.py", encoding="utf-8").read(), "solution.py", "exec"), ns)
+    if hasattr(signal, "SIGALRM"):
+        signal.alarm(0)
+except BaseException:
+    sys.exit(0)
+
+for node in tree.body:
+    try:
+        run([node], ns)
+        if is_test(node):
+            passed += 1
+            print(json.dumps({"passed": passed, "total": total}), flush=True)
+    except BaseException:
+        pass
+'''
+
+
+def score_code(code: str, tests: str) -> tuple[int, int]:
+    """Return (tests passed, total tests) for this code. Never raises."""
+    with tempfile.TemporaryDirectory() as folder:
+        for name, text in [("solution.py", code), ("tests.py", tests), ("scorer.py", SCORER)]:
+            with open(os.path.join(folder, name), "w", encoding="utf-8") as f:
+                f.write(text + "\n")
+        try:
+            out = subprocess.run([sys.executable, "scorer.py"], capture_output=True, text=True,
+                                 timeout=TEST_TIMEOUT_SECONDS * 3, cwd=folder).stdout
+        except subprocess.TimeoutExpired as e:
+            out = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
+    import json
+    lines = [l for l in out.splitlines() if l.startswith("{")]
+    if not lines:
+        return 0, 0
+    last = json.loads(lines[-1])
+    return last["passed"], last["total"]
+
+
+def score_attempts(history: list, tests: str) -> list[tuple[int, int]]:
+    """Score every attempt. Blocked code is never run; repeated code reuses its score."""
+    scores, seen = [], {}
+    for code, result in history:
+        key = code.strip()
+        if result.startswith("Blocked:"):
+            scores.append((0, score_code("", tests)[1]))
+        elif key in seen:
+            scores.append(seen[key])
+        else:
+            seen[key] = score_code(code, tests)
+            scores.append(seen[key])
+    return scores
+
+
 def run_tests(state: AgentState) -> dict:
     with tempfile.TemporaryDirectory() as folder:
         if FEEDBACK_MODE == "detailed":
@@ -348,6 +436,8 @@ def run_task(agent, item: dict) -> dict:
         {"recursion_limit": 50},
     )
     status = final["status"] if final["status"] in ("passed", "blocked") else "failed"
+    scores = score_attempts(final["history"], item["tests"])
+    total = scores[0][1] if scores else 0
     return {
         "task": item["name"],
         "level": item["level"],
@@ -358,51 +448,86 @@ def run_task(agent, item: dict) -> dict:
         "code": final["code"],
         "history": final["history"],
         "plans": final["plans"],
+        "scores": scores,
+        "tests_first": scores[0][0] if scores else 0,
+        "tests_best": max((p for p, _ in scores), default=0),
+        "tests_total": total,
     }
 
 
-def print_summary(rows: list[dict]) -> None:
-    print("\n\n==================== SUMMARY ====================")
-    print(f"{'task':<12}{'level':<8}{'status':<9}{'attempts':>9}{'repeats':>9}{'seconds':>9}")
-    print("-" * 56)
+def print_summary(rows: list[dict], run: int = 0, runs: int = 1) -> None:
+    title = "SUMMARY" if runs == 1 else f"SUMMARY - run {run} of {runs}"
+    print(f"\n\n==================== {title} ====================")
+    print(f"{'task':<12}{'level':<8}{'status':<9}{'attempts':>9}{'repeats':>9}{'tests':>9}{'seconds':>9}")
+    print("-" * 65)
     for r in rows:
+        tests = f"{r['tests_best']}/{r['tests_total']}"
         print(f"{r['task']:<12}{r['level']:<8}{r['status']:<9}{r['attempts']:>9}"
-              f"{r['repeats']:>9}{r['seconds']:>9}")
-    print("-" * 56)
+              f"{r['repeats']:>9}{tests:>9}{r['seconds']:>9}")
+    print("-" * 65)
     passed = sum(r["status"] == "passed" for r in rows)
     first_try = sum(r["status"] == "passed" and r["attempts"] == 1 for r in rows)
     print(f"Passed: {passed}/{len(rows)}   "
           f"(first try: {first_try}, fixed by retrying: {passed - first_try})   "
           f"Stuck repeats: {sum(r['repeats'] for r in rows)}")
+    t_total = sum(r["tests_total"] for r in rows)
+    print(f"Tests passed: first try {sum(r['tests_first'] for r in rows)}/{t_total}   "
+          f"best attempt {sum(r['tests_best'] for r in rows)}/{t_total}")
 
 
-def save_results(rows: list[dict]) -> str:
-    """Save a CSV summary and a full log (every attempt's code + error) in results/."""
+def print_overall(all_runs: list[list[dict]]) -> None:
+    """After several runs: one line per run, then the average."""
+    print("\n\n==================== ALL RUNS ====================")
+    print(f"{'run':<6}{'tasks passed':>14}{'tests first try':>18}{'tests best':>13}")
+    t_total = sum(r["tests_total"] for r in all_runs[0])
+    n_tasks = len(all_runs[0])
+    sums = [0, 0, 0]
+    for i, rows in enumerate(all_runs, 1):
+        vals = [sum(r["status"] == "passed" for r in rows),
+                sum(r["tests_first"] for r in rows), sum(r["tests_best"] for r in rows)]
+        sums = [a + b for a, b in zip(sums, vals)]
+        print(f"{i:<6}{f'{vals[0]}/{n_tasks}':>14}{f'{vals[1]}/{t_total}':>18}{f'{vals[2]}/{t_total}':>13}")
+    k = len(all_runs)
+    print("-" * 51)
+    print(f"{'avg':<6}{f'{sums[0] / k:.1f}/{n_tasks}':>14}{f'{sums[1] / k:.1f}/{t_total}':>18}"
+          f"{f'{sums[2] / k:.1f}/{t_total}':>13}")
+
+
+def save_results(all_runs: list[list[dict]]) -> str:
+    """Save a CSV (one row per task per run) and a full log (every attempt) in results/."""
     os.makedirs("results", exist_ok=True)
     base = os.path.join("results", time.strftime("%Y%m%d-%H%M%S")
                         + f"-{MODEL.replace(':', '_')}-{FEEDBACK_MODE}-max{MAX_ATTEMPTS}"
-                        + ("" if ANTI_STUCK else "-noantistuck") + ("-plan" if PLAN_FIRST else ""))
-    fields = ["task", "level", "status", "attempts", "repeats", "seconds",
+                        + ("" if ANTI_STUCK else "-noantistuck") + ("-plan" if PLAN_FIRST else "")
+                        + (f"-runs{len(all_runs)}" if len(all_runs) > 1 else ""))
+    fields = ["run", "task", "level", "status", "attempts", "repeats", "seconds",
+              "tests_first", "tests_best", "tests_total",
               "model", "feedback", "max_attempts", "anti_stuck", "plan_first"]
     with open(base + ".csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
-        for r in rows:
-            writer.writerow({**{k: r[k] for k in fields[:6]}, "model": MODEL,
-                             "feedback": FEEDBACK_MODE, "max_attempts": MAX_ATTEMPTS,
-                             "anti_stuck": ANTI_STUCK, "plan_first": PLAN_FIRST})
+        for run, rows in enumerate(all_runs, 1):
+            for r in rows:
+                writer.writerow({"run": run, **{k: r[k] for k in fields[1:10]}, "model": MODEL,
+                                 "feedback": FEEDBACK_MODE, "max_attempts": MAX_ATTEMPTS,
+                                 "anti_stuck": ANTI_STUCK, "plan_first": PLAN_FIRST})
     with open(base + ".log.md", "w", encoding="utf-8") as f:
         f.write(f"# Run log\n\nModel: {MODEL} | feedback: {FEEDBACK_MODE} | max attempts: {MAX_ATTEMPTS}"
                 f" | anti-stuck: {ANTI_STUCK} | plan-first: {PLAN_FIRST}\n")
-        for r in rows:
-            f.write(f"\n## {r['task']} ({r['level']}): {r['status']}\n")
-            for i, (code, result) in enumerate(r["history"], 1):
-                f.write(f"\n### Attempt {i}\n\n")
-                if i <= len(r["plans"]):
-                    # indent the plan so headings inside it can't look like log headings
-                    plan = "\n".join("    " + line for line in r["plans"][i - 1].splitlines())
-                    f.write(f"Plan:\n\n```text\n{plan}\n```\n\n")
-                f.write(f"```python\n{code}\n```\n\nResult:\n\n```\n{result}\n```\n")
+        for run, rows in enumerate(all_runs, 1):
+            if len(all_runs) > 1:
+                f.write(f"\n# Run {run} of {len(all_runs)}\n")
+            for r in rows:
+                f.write(f"\n## {r['task']} ({r['level']}): {r['status']}\n")
+                for i, (code, result) in enumerate(r["history"], 1):
+                    f.write(f"\n### Attempt {i}\n\n")
+                    if i <= len(r["plans"]):
+                        # indent the plan so headings inside it can't look like log headings
+                        plan = "\n".join("    " + line for line in r["plans"][i - 1].splitlines())
+                        f.write(f"Plan:\n\n```text\n{plan}\n```\n\n")
+                    p, t = r["scores"][i - 1]
+                    f.write(f"```python\n{code}\n```\n\nResult ({p}/{t} tests passed):\n\n"
+                            f"```\n{result}\n```\n")
     return base + ".csv"
 
 
@@ -420,6 +545,8 @@ if __name__ == "__main__":
                         help="turn OFF repeat detection and retry temperatures (old behaviour)")
     parser.add_argument("--plan", action="store_true",
                         help="plan first: rules + worked examples + steps before writing code")
+    parser.add_argument("--runs", type=int, default=1,
+                        help="repeat the whole benchmark N times (results vary between runs)")
     parser.add_argument("--show-code", action="store_true", help="print the final code of each task")
     parser.add_argument("--list", action="store_true", help="list task names and exit")
     args = parser.parse_args()
@@ -453,15 +580,21 @@ if __name__ == "__main__":
 
     print(f"Model: {MODEL}   Max attempts: {MAX_ATTEMPTS}   Feedback: {FEEDBACK_MODE}   "
           f"Anti-stuck: {'on' if ANTI_STUCK else 'off'}   Plan-first: {'on' if PLAN_FIRST else 'off'}   "
-          f"Tasks: {len(selected)}")
+          f"Tasks: {len(selected)}   Runs: {args.runs}")
     agent = build_agent()
-    rows = [run_task(agent, t) for t in selected]
+    all_runs = []
+    for run in range(1, args.runs + 1):
+        if args.runs > 1:
+            print(f"\n\n#################### RUN {run} of {args.runs} ####################")
+        rows = [run_task(agent, t) for t in selected]
+        all_runs.append(rows)
+        if args.show_code:
+            for r in rows:
+                print(f"\n----- code for {r['task']} ({r['status']}) -----\n{r['code']}")
+        print_summary(rows, run, args.runs)
 
-    if args.show_code:
-        for r in rows:
-            print(f"\n----- code for {r['task']} ({r['status']}) -----\n{r['code']}")
-
-    print_summary(rows)
-    csv_path = save_results(rows)
+    if args.runs > 1:
+        print_overall(all_runs)
+    csv_path = save_results(all_runs)
     print(f"Saved: {csv_path}")
     print(f"Log:   {csv_path[:-4]}.log.md   (every attempt's code and error)")

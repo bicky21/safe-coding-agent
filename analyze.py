@@ -28,11 +28,11 @@ def analyze(path: str) -> tuple[int, int]:
     for section in re.split(task_heading, text)[1:]:
         name = section.split("\n")[0]
         attempts = re.findall(
-            r"### Attempt \d+\n\n(?:Plan:\n\n```text\n.*?\n```\n\n)?```python\n(.*?)\n```\n\nResult:\n\n```\n(.*?)\n```",
+            r"### Attempt \d+\n\n(?:Plan:\n\n```text\n.*?\n```\n\n)?```python\n(.*?)\n```\n\nResult(?: \((\d+/\d+) tests passed\))?:\n\n```\n(.*?)\n```",
             section, re.S)
         seen = []
         stuck = []
-        for i, (code, _) in enumerate(attempts, 1):
+        for i, (code, _, _) in enumerate(attempts, 1):
             if code.strip() in seen:
                 stuck.append(i)
             seen.append(code.strip())
@@ -40,10 +40,11 @@ def analyze(path: str) -> tuple[int, int]:
         total_stuck += len(stuck)
 
         print(f"\n  {name}")
-        for i, (_, result) in enumerate(attempts, 1):
-            first = (result.strip().splitlines() or [""])[0][:90]
+        for i, (_, score, result) in enumerate(attempts, 1):
+            first = (result.strip().splitlines() or [""])[0][:85]
             mark = "  <- SAME CODE AS BEFORE" if i in stuck else ""
-            print(f"    attempt {i}: {first}{mark}")
+            tests = f"[{score} tests] " if score else ""
+            print(f"    attempt {i}: {tests}{first}{mark}")
 
     if total_retries:
         print(f"\n  Retries: {total_retries}   Stuck (identical code): {total_stuck} "

@@ -1,4 +1,4 @@
-# Self-Checking, Safe Coding Agent (v0.4)
+# Self-Checking, Safe Coding Agent (v0.5)
 
 A LangGraph coding agent that writes Python code, checks it for dangerous actions, runs tests, and fixes its own mistakes (up to 3 tries). Runs free and offline using Gemma through Ollama.
 
@@ -55,6 +55,7 @@ python agent.py --max-attempts 1    # self-checking OFF (for comparison)
 python agent.py --feedback simple   # raw Python errors only (for comparison)
 python agent.py --no-anti-stuck     # old behaviour: allow repeats, temperature 0
 python agent.py --plan              # plan first, then write code
+python agent.py --runs 3            # repeat everything 3 times, then show the average
 python agent.py --show-code         # also print the final code
 python agent.py --list              # list task names
 ```
@@ -91,6 +92,25 @@ Run each a few times (model output varies), on the tricky tasks:
 
 | 4 | `python agent.py --level tricky --no-anti-stuck` | detailed feedback, but repeats allowed |
 | 5 | `python agent.py --level tricky --plan` | plan first, then code |
+
+## Fair comparison (v0.5)
+
+"0/6 tasks passed" hides progress: a task passing 5 of 8 tests scores the same as one passing 0. So every run now also reports **tests passed** (partial credit), for the first attempt and for the best attempt:
+- **first try** = what you get *without* self-checking
+- **best** = what you get *with* self-checking
+
+Results also vary from run to run, so run each method several times with `--runs`:
+
+```bash
+python agent.py --level tricky --runs 3                     # anti-stuck + detailed feedback
+python agent.py --level tricky --runs 3 --plan              # plan-first
+python agent.py --level tricky --runs 3 --feedback simple   # anti-stuck + simple feedback
+python compare.py --level tricky                            # all methods side by side
+```
+
+`compare.py` groups every run in `results/` by its settings and shows the average and the range ("best range"). If two methods differ by less than their range, the difference is probably luck. Older runs are re-scored from their log files automatically.
+
+Runs without anti-stuck (`--max-attempts 1`, `--no-anti-stuck`) use temperature 0, so repeating them gives (almost) the same result; one run of those is enough.
 
 ## Plan-first mode (`--plan`)
 
@@ -135,7 +155,8 @@ Then run `python analyze.py` to see, for every task, each attempt's error and wh
 - [x] v0.2 Detailed test feedback (which test, got vs expected) + attempt log
 - [x] v0.3 Anti-stuck: detect repeated code, raise temperature on retries, list earlier errors; `analyze.py`
 - [x] v0.4 Plan-first mode: rules + worked examples + steps before code; retries fix the plan
-- [ ] v0.5 Replace regex safety check with Python AST checks
-- [ ] v0.6 Run tests inside Docker (real sandbox)
-- [ ] v0.7 Human-in-the-loop approval for risky actions (LangGraph `interrupt`)
-- [ ] v0.8 Prompt-injection test set + measure attacks blocked
+- [x] v0.5 Partial-credit test scores, `--runs N`, `compare.py`
+- [ ] v0.6 Replace regex safety check with Python AST checks
+- [ ] v0.7 Run tests inside Docker (real sandbox)
+- [ ] v0.8 Human-in-the-loop approval for risky actions (LangGraph `interrupt`)
+- [ ] v0.9 Prompt-injection test set + measure attacks blocked
