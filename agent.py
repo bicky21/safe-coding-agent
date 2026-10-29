@@ -1,5 +1,5 @@
 """
-Self-Checking, Safe Coding Agent (v0.2)
+Self-Checking, Safe Coding Agent (v0.3)
 
 Usage:
   python agent.py                     # run all tasks in tasks.py
@@ -7,16 +7,23 @@ Usage:
   python agent.py --level hard        # run only hard tasks
   python agent.py --max-attempts 1    # self-checking OFF (for comparison)
   python agent.py --feedback simple   # raw Python errors only (for comparison)
+  python agent.py --no-anti-stuck     # allow repeated code, temperature 0 (old behaviour)
   python agent.py --list              # show task names
 
 What it does:
   1. write_code   -> the LLM writes Python code for a task
-  2. check_safety -> blocks dangerous code (deleting files, running shell commands...)
-  3. run_tests    -> runs the code + tests in a temporary folder with a time limit
-  4. If tests fail, the error goes back to the LLM to fix (max 3 attempts)
+  2. check_repeat -> if the code is the same as an earlier failed attempt, ask for
+                     a different approach (no test run wasted)
+  3. check_safety -> blocks dangerous code (deleting files, running shell commands...)
+  4. run_tests    -> runs the code + tests in a temporary folder with a time limit
+  5. If tests fail, the error goes back to the LLM to fix (max 3 attempts)
 
 Graph:
-  START -> write_code -> check_safety --(blocked)--> END
+  START -> write_code -> check_repeat --(repeated)--> write_code (or END if out of attempts)
+                              |
+                            (new)
+                              v
+                         check_safety --(blocked)--> END
                               |
                            (safe)
                               v
@@ -46,6 +53,8 @@ MODEL = os.environ.get("AGENT_MODEL", "gemma3:4b")
 MAX_ATTEMPTS = 3
 TEST_TIMEOUT_SECONDS = 10
 FEEDBACK_MODE = "detailed"   # "detailed" (which test, got vs expected) or "simple" (raw error)
+ANTI_STUCK = True            # stop the model repeating the same failed code (see check_repeat)
+RETRY_TEMPERATURES = [0.0, 0.5, 0.8]   # temperature for attempt 1, 2, 3+ when ANTI_STUCK is on
 
 # Very simple safety rules (v0.1). You will improve these later.
 BLOCKED_PATTERNS = {
@@ -60,7 +69,15 @@ BLOCKED_PATTERNS = {
     r"\b(socket|requests|urllib)\b": "network access",
 }
 
-llm = ChatOllama(model=MODEL, temperature=0)
+
+
+def get_llm(attempt: int) -> ChatOllama:
+    """Temperature 0 = same prompt always gives the same answer. On retries we raise it
+    a little so the model can try something new instead of repeating itself."""
+    if not ANTI_STUCK:
+        return ChatOllama(model=MODEL, temperature=0)
+    t = RETRY_TEMPERATURES[min(attempt, len(RETRY_TEMPERATURES)) - 1]
+    return ChatOllama(model=MODEL, temperature=t)
 
 
 # ---------------- State (the agent's memory) ----------------
@@ -72,6 +89,7 @@ class AgentState(TypedDict):
     attempts: int   # how many times the LLM has written code
     status: str     # "running" | "passed" | "blocked"
     history: list   # (code, result) for every attempt - saved to the log file
+    repeats: int    # how many times the model returned code it had already tried
 
 
 # ---------------- Helpers ----------------
@@ -91,17 +109,39 @@ def write_code(state: AgentState) -> dict:
         "- Do not write tests, do not use input(), do not touch files or the network.\n"
     )
     if state["feedback"]:
+        if ANTI_STUCK and len(state["history"]) > 1:
+            # remind the model of ALL earlier mistakes, not only the last one
+            earlier = "\n".join(f"- attempt {i}: {res.strip().splitlines()[0][:200]}"
+                                 for i, (_, res) in enumerate(state["history"][:-1], 1))
+            prompt += f"\nEarlier attempts also failed:\n{earlier}\n"
         prompt += (
             "\nYour previous code failed.\n"
             f"Previous code:\n```python\n{state['code']}\n```\n"
             f"Error:\n{state['feedback']}\n"
-            "Fix the code.\n"
+            "Re-read the task rules carefully, find the real cause of the error, and fix the code.\n"
         )
 
-    response = llm.invoke(prompt)
     attempt = state["attempts"] + 1
+    response = get_llm(attempt).invoke(prompt)
     print(f"\n--- Attempt {attempt}: code written ---")
     return {"code": extract_code(response.content), "attempts": attempt}
+
+
+def check_repeat(state: AgentState) -> dict:
+    """If the model returned code it already tried, don't waste a test run on it.
+    Tell it clearly to try a different approach."""
+    if not ANTI_STUCK:
+        return {}
+    for i, (old_code, old_result) in enumerate(state["history"], 1):
+        if old_code.strip() == state["code"].strip():
+            print(f"STUCK: same code as attempt {i} - asking for a different approach")
+            fb = (f"You returned EXACTLY the same code as attempt {i}, which already failed with:\n"
+                  f"{old_result}\n"
+                  "Do not repeat it. Rethink the approach from the task rules and write a "
+                  "DIFFERENT solution.")
+            return {"status": "repeat", "feedback": fb, "repeats": state["repeats"] + 1,
+                    "history": state["history"] + [(state["code"], "REPEATED attempt " + str(i))]}
+    return {"status": "running"}
 
 
 def check_safety(state: AgentState) -> dict:
@@ -219,6 +259,12 @@ def run_tests(state: AgentState) -> dict:
 
 
 # ---------------- Routing (which step comes next) ----------------
+def after_repeat(state: AgentState) -> str:
+    if state["status"] != "repeat":
+        return "new"
+    return "done" if state["attempts"] >= MAX_ATTEMPTS else "retry"
+
+
 def after_safety(state: AgentState) -> str:
     return "blocked" if state["status"] == "blocked" else "safe"
 
@@ -233,11 +279,14 @@ def after_tests(state: AgentState) -> str:
 def build_agent():
     graph = StateGraph(AgentState)
     graph.add_node("write_code", write_code)
+    graph.add_node("check_repeat", check_repeat)
     graph.add_node("check_safety", check_safety)
     graph.add_node("run_tests", run_tests)
 
     graph.add_edge(START, "write_code")
-    graph.add_edge("write_code", "check_safety")
+    graph.add_edge("write_code", "check_repeat")
+    graph.add_conditional_edges("check_repeat", after_repeat,
+                                {"new": "check_safety", "retry": "write_code", "done": END})
     graph.add_conditional_edges("check_safety", after_safety, {"blocked": END, "safe": "run_tests"})
     graph.add_conditional_edges("run_tests", after_tests, {"done": END, "retry": "write_code"})
     return graph.compile()
@@ -250,15 +299,16 @@ def run_task(agent, item: dict) -> dict:
     start = time.time()
     final = agent.invoke(
         {"task": item["task"], "tests": item["tests"], "code": "", "feedback": "",
-         "attempts": 0, "status": "running", "history": []},
+         "attempts": 0, "status": "running", "history": [], "repeats": 0},
         {"recursion_limit": 50},
     )
-    status = final["status"] if final["status"] != "running" else "failed"
+    status = final["status"] if final["status"] in ("passed", "blocked") else "failed"
     return {
         "task": item["name"],
         "level": item["level"],
         "status": status,
         "attempts": final["attempts"],
+        "repeats": final["repeats"],
         "seconds": round(time.time() - start, 1),
         "code": final["code"],
         "history": final["history"],
@@ -267,31 +317,37 @@ def run_task(agent, item: dict) -> dict:
 
 def print_summary(rows: list[dict]) -> None:
     print("\n\n==================== SUMMARY ====================")
-    print(f"{'task':<12}{'level':<8}{'status':<9}{'attempts':>9}{'seconds':>9}")
-    print("-" * 47)
+    print(f"{'task':<12}{'level':<8}{'status':<9}{'attempts':>9}{'repeats':>9}{'seconds':>9}")
+    print("-" * 56)
     for r in rows:
-        print(f"{r['task']:<12}{r['level']:<8}{r['status']:<9}{r['attempts']:>9}{r['seconds']:>9}")
-    print("-" * 47)
+        print(f"{r['task']:<12}{r['level']:<8}{r['status']:<9}{r['attempts']:>9}"
+              f"{r['repeats']:>9}{r['seconds']:>9}")
+    print("-" * 56)
     passed = sum(r["status"] == "passed" for r in rows)
     first_try = sum(r["status"] == "passed" and r["attempts"] == 1 for r in rows)
     print(f"Passed: {passed}/{len(rows)}   "
-          f"(first try: {first_try}, fixed by retrying: {passed - first_try})")
+          f"(first try: {first_try}, fixed by retrying: {passed - first_try})   "
+          f"Stuck repeats: {sum(r['repeats'] for r in rows)}")
 
 
 def save_results(rows: list[dict]) -> str:
     """Save a CSV summary and a full log (every attempt's code + error) in results/."""
     os.makedirs("results", exist_ok=True)
     base = os.path.join("results", time.strftime("%Y%m%d-%H%M%S")
-                        + f"-{MODEL.replace(':', '_')}-{FEEDBACK_MODE}-max{MAX_ATTEMPTS}")
-    fields = ["task", "level", "status", "attempts", "seconds", "model", "feedback", "max_attempts"]
+                        + f"-{MODEL.replace(':', '_')}-{FEEDBACK_MODE}-max{MAX_ATTEMPTS}"
+                        + ("" if ANTI_STUCK else "-noantistuck"))
+    fields = ["task", "level", "status", "attempts", "repeats", "seconds",
+              "model", "feedback", "max_attempts", "anti_stuck"]
     with open(base + ".csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for r in rows:
-            writer.writerow({**{k: r[k] for k in fields[:5]}, "model": MODEL,
-                             "feedback": FEEDBACK_MODE, "max_attempts": MAX_ATTEMPTS})
+            writer.writerow({**{k: r[k] for k in fields[:6]}, "model": MODEL,
+                             "feedback": FEEDBACK_MODE, "max_attempts": MAX_ATTEMPTS,
+                             "anti_stuck": ANTI_STUCK})
     with open(base + ".log.md", "w", encoding="utf-8") as f:
-        f.write(f"# Run log\n\nModel: {MODEL} | feedback: {FEEDBACK_MODE} | max attempts: {MAX_ATTEMPTS}\n")
+        f.write(f"# Run log\n\nModel: {MODEL} | feedback: {FEEDBACK_MODE} | max attempts: {MAX_ATTEMPTS}"
+                f" | anti-stuck: {ANTI_STUCK}\n")
         for r in rows:
             f.write(f"\n## {r['task']} ({r['level']}): {r['status']}\n")
             for i, (code, result) in enumerate(r["history"], 1):
@@ -309,6 +365,8 @@ if __name__ == "__main__":
                         help="tries per task (use 1 to switch self-checking off)")
     parser.add_argument("--feedback", choices=["detailed", "simple"], default=FEEDBACK_MODE,
                         help="detailed = which test failed + got vs expected; simple = raw error")
+    parser.add_argument("--no-anti-stuck", action="store_true",
+                        help="turn OFF repeat detection and retry temperatures (old behaviour)")
     parser.add_argument("--show-code", action="store_true", help="print the final code of each task")
     parser.add_argument("--list", action="store_true", help="list task names and exit")
     args = parser.parse_args()
@@ -320,6 +378,7 @@ if __name__ == "__main__":
 
     MAX_ATTEMPTS = args.max_attempts
     FEEDBACK_MODE = args.feedback
+    ANTI_STUCK = not args.no_anti_stuck
     selected = [t for t in TASKS
                 if (not args.task or t["name"] == args.task)
                 and (not args.level or t["level"] == args.level)]
@@ -327,7 +386,7 @@ if __name__ == "__main__":
         sys.exit(f"No task matched. Use --list to see task names.")
 
     print(f"Model: {MODEL}   Max attempts: {MAX_ATTEMPTS}   Feedback: {FEEDBACK_MODE}   "
-          f"Tasks: {len(selected)}")
+          f"Anti-stuck: {'on' if ANTI_STUCK else 'off'}   Tasks: {len(selected)}")
     agent = build_agent()
     rows = [run_task(agent, t) for t in selected]
 

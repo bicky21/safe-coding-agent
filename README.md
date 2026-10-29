@@ -1,11 +1,15 @@
-# Self-Checking, Safe Coding Agent (v0.2)
+# Self-Checking, Safe Coding Agent (v0.3)
 
 A LangGraph coding agent that writes Python code, checks it for dangerous actions, runs tests, and fixes its own mistakes (up to 3 tries). Runs free and offline using Gemma through Ollama.
 
 ## How it works
 
 ```
-START -> write_code -> check_safety --(blocked)--> END
+START -> write_code -> check_repeat --(same code as before)--> write_code
+                           |
+                         (new)
+                           v
+                       check_safety --(blocked)--> END
                            |
                         (safe)
                            v
@@ -49,6 +53,7 @@ python agent.py --task roman        # run one task
 python agent.py --level tricky      # run only the tricky tasks
 python agent.py --max-attempts 1    # self-checking OFF (for comparison)
 python agent.py --feedback simple   # raw Python errors only (for comparison)
+python agent.py --no-anti-stuck     # old behaviour: allow repeats, temperature 0
 python agent.py --show-code         # also print the final code
 python agent.py --list              # list task names
 ```
@@ -83,7 +88,23 @@ Run each a few times (model output varies), on the tricky tasks:
 | 2 | `python agent.py --level tricky --feedback simple` | self-checking with raw errors |
 | 3 | `python agent.py --level tricky --feedback detailed` | self-checking with detailed feedback |
 
-First results (gemma3:4b, tricky tasks): #1 passed 0/6, #2 passed 1/6.
+| 4 | `python agent.py --level tricky --no-anti-stuck` | detailed feedback, but repeats allowed |
+
+Then run `python analyze.py` to see, for every task, each attempt's error and which attempts were copies of an earlier one.
+
+## Findings so far (gemma3:4b)
+
+| Run | Tricky tasks passed |
+|-----|---------------------|
+| No self-checking (`--max-attempts 1`) | 0/6 |
+| Self-checking, simple feedback | 1/6 (twice) |
+| Self-checking, detailed feedback | 0/6 |
+
+1. **Famous problems are solved from memory.** All 7 easy/medium/hard tasks passed on the first try. Tasks with unusual rules mostly fail.
+2. **The agent got stuck repeating itself.** With `temperature=0`, once the model repeats its code, the next prompt is word-for-word the same, so the answer is the same again. 7 of 23 retries (30%) were identical copies of an earlier attempt (`python analyze.py`). v0.3 adds `check_repeat` and higher temperature on retries to fix this.
+3. **The model ignores exact rules** and falls back to the famous version (e.g. a clockwise spiral when the task says "go DOWN first").
+4. **Fixes often touch the wrong part** of the code, or fix one bug and add another.
+5. The simple vs detailed difference (1 task) is within run-to-run noise; more runs are needed.
 
 ## Roadmap
 
@@ -91,7 +112,8 @@ First results (gemma3:4b, tricky tasks): #1 passed 0/6, #2 passed 1/6.
 - [x] v0.1.1 Benchmark of 7 tasks, summary table, CSV results
 - [x] v0.1.2 6 "tricky" tasks with unusual rules (to avoid data contamination)
 - [x] v0.2 Detailed test feedback (which test, got vs expected) + attempt log
-- [ ] v0.3 Replace regex safety check with Python AST checks
-- [ ] v0.4 Run tests inside Docker (real sandbox)
-- [ ] v0.5 Human-in-the-loop approval for risky actions (LangGraph `interrupt`)
-- [ ] v0.6 Prompt-injection test set + measure attacks blocked
+- [x] v0.3 Anti-stuck: detect repeated code, raise temperature on retries, list earlier errors; `analyze.py`
+- [ ] v0.4 Replace regex safety check with Python AST checks
+- [ ] v0.5 Run tests inside Docker (real sandbox)
+- [ ] v0.6 Human-in-the-loop approval for risky actions (LangGraph `interrupt`)
+- [ ] v0.7 Prompt-injection test set + measure attacks blocked
