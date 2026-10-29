@@ -78,3 +78,9 @@ def test_default_code_budget_fits_ollama():
     s = Settings(model=parse_model("ollama:gemma3:4b"))
     assert context_for(s.code_budget + 12_000)[1]
     assert Settings(model=parse_model("anthropic:claude-sonnet-5-5")).code_budget == 120_000
+
+
+def test_ollama_num_thread_from_env(monkeypatch):
+    from safe_coding_agent.models import make_model
+    monkeypatch.setenv("SCA_OLLAMA_NUM_THREAD", "4")
+    assert make_model(parse_model("ollama:qwen2.5-coder:7b"), 0.0).num_thread == 4

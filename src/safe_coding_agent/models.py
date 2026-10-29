@@ -64,6 +64,8 @@ def _ollama(spec: ModelSpec, temperature: float) -> BaseChatModel:
     kwargs = {"model": spec.name, "temperature": temperature, "num_predict": spec.max_tokens}
     if spec.base_url or os.environ.get("OLLAMA_HOST"):
         kwargs["base_url"] = spec.base_url or os.environ["OLLAMA_HOST"]
+    if os.environ.get("SCA_OLLAMA_NUM_THREAD"):     # fewer CPU threads = cooler (and slower)
+        kwargs["num_thread"] = int(os.environ["SCA_OLLAMA_NUM_THREAD"])
     if os.environ.get("SCA_OLLAMA_NUM_CTX"):
         kwargs["num_ctx"] = int(os.environ["SCA_OLLAMA_NUM_CTX"])
     elif spec.num_ctx:

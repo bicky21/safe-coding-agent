@@ -74,7 +74,7 @@ GPU has the memory, e.g. `export SCA_OLLAMA_MAX_CTX=65536`. `SCA_OLLAMA_NUM_CTX`
 
 **Laptop running hot?** Long local runs keep the CPU/GPU at full load for minutes. Keep it
 plugged in with good airflow, watch temperatures with `watch -n 2 sensors`, and use fewer
-CPU threads: `export OLLAMA_NUM_THREAD=4`.
+CPU threads: `export SCA_OLLAMA_NUM_THREAD=4` (slower, but cooler).
 
 ## Writing a task
 
