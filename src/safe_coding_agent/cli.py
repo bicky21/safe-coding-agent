@@ -46,7 +46,8 @@ def add_agent_options(p: argparse.ArgumentParser) -> None:
     g.add_argument("--api-key-env", help="name of the env variable holding the API key")
     g.add_argument("--max-tokens", type=int, default=8192, help="max tokens per model reply")
     g = p.add_argument_group("agent")
-    g.add_argument("--max-attempts", type=int, default=3, help="real tries per task (1 = no self-checking); unusable answers and repeats don't count")
+    g.add_argument("--max-attempts", type=int, default=3,
+                   help="real tries per task (1 = no self-checking); unusable answers and repeats don't count")
     g.add_argument("--plan", action="store_true", help="plan first: rules, worked examples, steps")
     g.add_argument("--feedback", choices=["detailed", "simple"], default="detailed",
                    help="detailed = full pytest failure output; simple = failing test names only")
