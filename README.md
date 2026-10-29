@@ -65,8 +65,16 @@ sca run my-task --model openai:local-model --base-url http://localhost:1234/v1  
 ```
 
 Set a default with `export SCA_MODEL=anthropic:claude-sonnet-5-5`. Remote Ollama:
-`--base-url http://host:11434` (or `OLLAMA_HOST`). Bigger Ollama context window:
-`export SCA_OLLAMA_NUM_CTX=32768`.
+`--base-url http://host:11434` (or `OLLAMA_HOST`).
+
+**Ollama context window:** Ollama silently cuts prompts longer than its window (4096 tokens by
+default), so the agent sizes the window for each prompt automatically (8k, 16k or 32k tokens).
+The upper limit is `SCA_OLLAMA_MAX_CTX` (default 32768); raise it for big projects if your
+GPU has the memory, e.g. `export SCA_OLLAMA_MAX_CTX=65536`. `SCA_OLLAMA_NUM_CTX` forces one fixed size.
+
+**Laptop running hot?** Long local runs keep the CPU/GPU at full load for minutes. Keep it
+plugged in with good airflow, watch temperatures with `watch -n 2 sensors`, and use fewer
+CPU threads: `export OLLAMA_NUM_THREAD=4`.
 
 ## Writing a task
 
@@ -97,8 +105,8 @@ The prompt can also live in a `task.md` file. See [`examples/todo-project`](exam
 for a complete multi-file task with starter code.
 
 **Bigger code bases:** everything in `starter/` is shown to the model, up to
-`--context-chars` (default 120,000 characters, about 30k tokens); files beyond that are listed
-by name only. Put the files that matter in `starter/`, and use a model with a large context
+`--context-chars` (default: what fits the Ollama window, about 74,000 characters; 120,000 for
+API models); files beyond that are listed by name only. Put the files that matter in `starter/`, and use a model with a large context
 window for big projects.
 
 ## Safety

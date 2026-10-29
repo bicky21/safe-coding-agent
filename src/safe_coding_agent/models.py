@@ -31,6 +31,7 @@ class ModelSpec:
     base_url: str | None = None
     api_key_env: str | None = None
     max_tokens: int = 8192
+    num_ctx: int | None = None        # Ollama context window for this call (see context_for)
 
     @property
     def label(self) -> str:
@@ -65,7 +66,26 @@ def _ollama(spec: ModelSpec, temperature: float) -> BaseChatModel:
         kwargs["base_url"] = spec.base_url or os.environ["OLLAMA_HOST"]
     if os.environ.get("SCA_OLLAMA_NUM_CTX"):
         kwargs["num_ctx"] = int(os.environ["SCA_OLLAMA_NUM_CTX"])
+    elif spec.num_ctx:
+        kwargs["num_ctx"] = spec.num_ctx
     return ChatOllama(**kwargs)
+
+
+OLLAMA_CTX_SIZES = (4096, 8192, 16384, 32768, 65536, 131072)
+REPLY_RESERVE = 4096   # tokens kept free for the answer
+
+
+def context_for(prompt_chars: int) -> tuple[int, bool]:
+    """Ollama silently cuts prompts longer than its context window (default 4096 tokens), so pick
+    a window that fits prompt + answer. Sizes are rounded to a few fixed steps because every
+    change makes Ollama reload the model. Returns (num_ctx, fits). The upper limit is
+    SCA_OLLAMA_MAX_CTX (default 32768): bigger windows need much more (GPU) memory."""
+    needed = prompt_chars // 3 + REPLY_RESERVE          # ~3 characters per token for code
+    limit = int(os.environ.get("SCA_OLLAMA_MAX_CTX", "32768"))
+    for size in OLLAMA_CTX_SIZES:
+        if size >= needed and size <= limit:
+            return size, True
+    return max([s for s in OLLAMA_CTX_SIZES if s <= limit] or [4096]), False
 
 
 def _openai(spec: ModelSpec, temperature: float) -> BaseChatModel:

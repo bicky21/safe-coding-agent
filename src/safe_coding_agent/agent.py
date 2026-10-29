@@ -10,15 +10,17 @@ Every attempt is recorded (plan, files, test result) so runs can be analysed lat
 
 from __future__ import annotations
 
+import os
+import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from . import prompts
-from .models import ModelSpec, invoke_with_retry, make_model
+from .models import REPLY_RESERVE, ModelSpec, context_for, invoke_with_retry, make_model
 from .safety import check_files
 from .sandbox import RunResult
 from .tasks import Task
@@ -34,13 +36,24 @@ class Settings:
     plan_first: bool = False              # write a plan before each code attempt
     safety: str | None = None             # override the task's level: standard | strict | off
     temperatures: tuple[float, ...] = (0.0, 0.5, 0.8)
-    context_chars: int = 120_000          # how much existing code may go into one prompt
+    context_chars: int | None = None      # how much existing code may go into one prompt
+                                          # (default: fits the Ollama window, else 120,000)
     timeout: int | None = None            # override the task's test timeout
 
     def temperature(self, attempt: int) -> float:
         if not self.anti_stuck:
             return 0.0
         return self.temperatures[min(attempt, len(self.temperatures)) - 1]
+
+    @property
+    def code_budget(self) -> int:
+        if self.context_chars:
+            return self.context_chars
+        if self.model.provider == "ollama":
+            limit = int(os.environ.get("SCA_OLLAMA_MAX_CTX", "32768"))
+            # leave ~4000 tokens for the task, instructions, test feedback and plan
+            return max((limit - REPLY_RESERVE - 4000) * 3, 8000)
+        return 120_000
 
     def describe(self) -> dict[str, Any]:
         return {"model": self.model.label, "max_attempts": self.max_attempts, "feedback": self.feedback,
@@ -60,6 +73,7 @@ class Attempt:
     seconds: float = 0.0
     violations: list[str] = field(default_factory=list)
     reply: str = ""                  # the model's raw answer (kept for debugging)
+    failure_signature: tuple = ()    # which tests failed and how (to spot changes that fix nothing)
 
     def to_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -87,11 +101,20 @@ class CodingAgent:
     def __init__(self, task: Task, settings: Settings, runner, on_event: Event | None = None):
         self.task, self.s, self.runner = task, settings, runner
         self.say = on_event or (lambda msg: None)
+        self._warned_ctx = False
         self.graph = self._build()
 
     # ------------------------------------------------------------ helpers
     def _ask(self, system: str, prompt: str, attempt: int) -> str:
-        model = make_model(self.s.model, self.s.temperature(attempt))
+        spec = self.s.model
+        if spec.provider == "ollama":
+            num_ctx, fits = context_for(len(system) + len(prompt))
+            if not fits and not self._warned_ctx:
+                self._warned_ctx = True
+                self.say(f"WARNING: prompt (~{len(prompt) // 3} tokens) is bigger than the Ollama context "
+                         f"limit ({num_ctx}); Ollama will cut it. Raise SCA_OLLAMA_MAX_CTX or lower --context-chars")
+            spec = replace(spec, num_ctx=num_ctx)
+        model = make_model(spec, self.s.temperature(attempt))
         return invoke_with_retry(model, [SystemMessage(system), HumanMessage(prompt)])
 
     def _n(self, state: State) -> int:
@@ -117,7 +140,7 @@ class CodingAgent:
         self.say(f"attempt {n}: planning")
         text = self._ask(prompts.PLAN_SYSTEM, prompts.plan_prompt(
             self.task, state.get("files", {}), state.get("plan", ""), state.get("feedback", ""),
-            self.s.context_chars), n)
+            self.s.code_budget), n)
         return {"plan": text.strip()}
 
     def write_code(self, state: State) -> dict:
@@ -125,7 +148,7 @@ class CodingAgent:
         self.say(f"attempt {n}: writing code")
         reply = self._ask(prompts.SYSTEM, prompts.code_prompt(
             self.task, state.get("files", {}), state.get("plan", "") if self.s.plan_first else "",
-            state.get("feedback", ""), self._earlier(state), self.s.context_chars), n)
+            state.get("feedback", ""), self._earlier(state), self.s.code_budget), n)
         files, problems = prompts.parse_files(reply, self.task)
         if problems and not files:
             fb = ("Your answer could not be used: " + "; ".join(problems) + ".\n\n" + prompts.OUTPUT_FORMAT)
@@ -169,9 +192,28 @@ class CodingAgent:
         self.say(f"attempt {n}: {res.passed}/{res.total} tests passed"
                  + (" (timeout)" if res.timed_out else "") + (" (import failed)" if res.collection_error else ""))
         fb = "" if status == "passed" else prompts.feedback_text(res, self.s.feedback)
-        out = self._record(state, status, fb or "all tests passed", passed=res.passed, total=res.total)
+        if status == "failed" and self.s.anti_stuck:
+            same = self._same_failures_as(state, res)
+            if same:
+                self.say(f"attempt {n}: no progress - same failures as attempt {same.number}")
+                fb = (f"Your change did NOT fix anything: the same {len(res.failures)} test(s) fail in exactly the "
+                      f"same way as in attempt {same.number}. Changing code that is not on the failing path does "
+                      "not help. Read each error below, find the exact line it points to, and change THAT logic.\n\n"
+                      + fb)
+        out = self._record(state, status, fb or "all tests passed", passed=res.passed, total=res.total,
+                           failure_signature=_failure_signature(res))
         out["files"] = files
         return out
+
+    def _same_failures_as(self, state: State, res: RunResult) -> "Attempt | None":
+        """The latest earlier tested attempt that failed in exactly the same way, if any."""
+        sig = _failure_signature(res)
+        if not sig:
+            return None
+        for a in reversed(state.get("attempts", [])):
+            if a.status == "failed":
+                return a if a.failure_signature == sig else None
+        return None
 
     # ------------------------------------------------------------ routing
     def _retry_target(self) -> str:
@@ -256,6 +298,14 @@ class TaskResult:
     @property
     def blocked(self) -> int:
         return sum(a.status == "blocked" for a in self.attempts)
+
+
+def _failure_signature(res: RunResult) -> tuple:
+    """Failing test names + the first line of each error, ignoring file paths/line numbers."""
+    def norm(msg: str) -> str:
+        first = (msg or "").strip().splitlines()[0] if msg and msg.strip() else ""
+        return re.sub(r"(line \d+|:\d+:|/tmp/\S+)", "", first)[:200]
+    return tuple(sorted((f.name, norm(f.message)) for f in res.failures))
 
 
 def _merged_files(attempts: list[Attempt], upto: Attempt | None) -> dict[str, str]:

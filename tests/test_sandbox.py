@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from safe_coding_agent.sandbox import DockerRunner, LocalRunner, build_workspace, get_runner
+from safe_coding_agent.sandbox import DockerRunner, LocalRunner, build_workspace, get_runner, summarize_output
 from safe_coding_agent.tasks import load_task
 
 from .conftest import ADD_TESTS
@@ -96,3 +96,15 @@ def test_auto_runner_falls_back_to_local_with_warning(monkeypatch):
     monkeypatch.setattr("safe_coding_agent.sandbox.docker_status", lambda image: (False, "no docker"))
     runner, note = get_runner("auto")
     assert runner.name == "local" and "LOCAL" in note
+
+
+def test_full_assertion_diff_is_shown(make_task):
+    task = load_task(make_task("""
+        from solution import order
+        def test_order():
+            assert order() == ["write report", "buy milk", "call mom", "walk dog", "pay bills"]
+    """))
+    r = LocalRunner().run(task, {"solution.py": "def order():\n    return ['buy milk', 'call mom', "
+                                                "'walk dog', 'pay bills', 'write report']\n"})
+    assert "['buy milk', 'call mom', 'walk dog', 'pay bills', 'write report']" in r.output
+    assert "generated xml file" not in summarize_output(r.output)

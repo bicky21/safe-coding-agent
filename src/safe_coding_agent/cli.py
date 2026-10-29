@@ -53,8 +53,9 @@ def add_agent_options(p: argparse.ArgumentParser) -> None:
                    help="detailed = full pytest failure output; simple = failing test names only")
     g.add_argument("--no-anti-stuck", action="store_true",
                    help="allow repeated code and keep temperature 0 on retries")
-    g.add_argument("--context-chars", type=int, default=120_000,
-                   help="max characters of existing code to put in one prompt")
+    g.add_argument("--context-chars", type=int,
+                   help="max characters of existing code in one prompt (default: fits the Ollama "
+                        "context limit SCA_OLLAMA_MAX_CTX, or 120,000 for API models)")
     g = p.add_argument_group("safety & sandbox")
     g.add_argument("--safety", choices=["standard", "strict", "off"],
                    help="override every task's safety level")

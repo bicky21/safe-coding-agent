@@ -83,7 +83,8 @@ def build_workspace(task: Task, files: dict[str, str], root: Path) -> Path:
 
 
 def pytest_args(report_path: str) -> list[str]:
-    return ["-m", "pytest", "tests", "-q", "--tb=short", "--color=no", "-p", "no:cacheprovider",
+    # -vv: full assertion diffs (with -q pytest shortens lists to "['a', ...'c']", hiding the bug)
+    return ["-m", "pytest", "tests", "-vv", "--tb=short", "--color=no", "-p", "no:cacheprovider",
             "--continue-on-collection-errors",
             "-o", "console_output_style=classic", "-o", "junit_family=xunit1",
             f"--junitxml={report_path}"]
@@ -147,7 +148,7 @@ def parse_report(report: Path, output: str, returncode: int, task: Task) -> RunR
 
 def summarize_output(output: str, limit: int = 6000) -> str:
     """The useful part of pytest's output: the failure/error sections and the summary."""
-    lines = output.splitlines()
+    lines = [line for line in output.splitlines() if "generated xml file" not in line]
     start = next((i for i, line in enumerate(lines)
                   if line.startswith("=") and ("FAILURES" in line or "ERRORS" in line)), 0)
     text = "\n".join(lines[start:])

@@ -144,3 +144,26 @@ def test_raw_reply_is_kept(make_task, script, model_spec):
     script.replies = ["I think the answer is 42.", reply(GOOD)]
     r = run(make_task(ADD_TESTS), model_spec)
     assert r.attempts[0].reply == "I think the answer is 42."
+
+
+def test_change_that_fixes_nothing_is_called_out(make_task, script, model_spec):
+    cosmetic = {"solution.py": "def add(a, b):\n    # rewritten\n    return a - b\n"}   # same bug
+    script.replies = [reply(BAD), reply(cosmetic), reply(GOOD)]
+    r = run(make_task(ADD_TESTS), model_spec)
+    assert [a.status for a in r.attempts] == ["failed", "failed", "passed"]
+    assert "did NOT fix anything" in script.calls[2]["prompt"]
+    assert "did NOT fix anything" not in script.calls[1]["prompt"]
+
+
+def test_ollama_gets_a_context_window_that_fits(make_task, script, monkeypatch):
+    from safe_coding_agent import agent as agent_mod
+    from safe_coding_agent.models import parse_model
+    seen = []
+    real = agent_mod.make_model
+    monkeypatch.setattr(agent_mod, "make_model", lambda spec, t: (seen.append(spec.num_ctx), real(
+        parse_model("scripted:x"), t))[1])
+    script.replies = [reply(GOOD)]
+    big = {"lib/big.py": "x = 1\n" * 3000}                              # ~18k chars -> needs > 4096 tokens
+    CodingAgent(load_task(make_task(ADD_TESTS, starter=big)), Settings(model=parse_model("ollama:fake")),
+                LocalRunner()).run()
+    assert seen and seen[0] >= 8192
