@@ -1,0 +1,6 @@
+run,task,level,status,attempts,repeats,blocked,first_passed,best_passed,total,seconds
+1,config-parser,project,failed,3,0,0,19,20,21,85.6
+1,expression-eval,project,failed,3,0,0,37,38,40,108.1
+1,inventory-ledger,project,passed,1,0,0,17,17,17,28.3
+1,recurring-events,project,failed,5,0,0,15,19,25,223.1
+1,template-engine,project,failed,5,0,0,17,17,51,127.1
