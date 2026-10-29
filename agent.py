@@ -399,7 +399,9 @@ def save_results(rows: list[dict]) -> str:
             for i, (code, result) in enumerate(r["history"], 1):
                 f.write(f"\n### Attempt {i}\n\n")
                 if i <= len(r["plans"]):
-                    f.write(f"Plan:\n\n```text\n{r['plans'][i - 1]}\n```\n\n")
+                    # indent the plan so headings inside it can't look like log headings
+                    plan = "\n".join("    " + line for line in r["plans"][i - 1].splitlines())
+                    f.write(f"Plan:\n\n```text\n{plan}\n```\n\n")
                 f.write(f"```python\n{code}\n```\n\nResult:\n\n```\n{result}\n```\n")
     return base + ".csv"
 

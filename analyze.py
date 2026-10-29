@@ -22,7 +22,10 @@ def analyze(path: str) -> tuple[int, int]:
     print(f"\n# {path}\n  {header}")
     total_retries = total_stuck = 0
 
-    for section in re.split(r"\n## ", text)[1:]:
+    # task headings look like "## rle (tricky): failed"; other "## ..." lines can appear
+    # inside the model's plans, so only split on real task headings
+    task_heading = r"\n## (?=\S+ \((?:easy|medium|hard|tricky)\): \w+\n)"
+    for section in re.split(task_heading, text)[1:]:
         name = section.split("\n")[0]
         attempts = re.findall(
             r"### Attempt \d+\n\n(?:Plan:\n\n```text\n.*?\n```\n\n)?```python\n(.*?)\n```\n\nResult:\n\n```\n(.*?)\n```",
