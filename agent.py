@@ -1,5 +1,12 @@
 """
-Self-Checking, Safe Coding Agent - starter version (v0.1)
+Self-Checking, Safe Coding Agent (v0.1.1)
+
+Usage:
+  python agent.py                     # run all tasks in tasks.py
+  python agent.py --task roman        # run one task
+  python agent.py --level hard        # run only hard tasks
+  python agent.py --max-attempts 1    # self-checking OFF (for comparison)
+  python agent.py --list              # show task names
 
 What it does:
   1. write_code   -> the LLM writes Python code for a task
@@ -19,8 +26,11 @@ Graph:
                           write_code  (try again with the error message)
 """
 
+import argparse
+import csv
 import os
 import re
+import time
 import subprocess
 import sys
 import tempfile
@@ -150,27 +160,83 @@ def build_agent():
     return graph.compile()
 
 
-# ---------------- Try it ----------------
-if __name__ == "__main__":
-    agent = build_agent()
-
-    task = (
-        "Write a function is_palindrome(s: str) -> bool that returns True if s is a "
-        "palindrome, ignoring case, spaces and punctuation."
-    )
-    tests = """
-assert is_palindrome("A man, a plan, a canal: Panama") is True
-assert is_palindrome("racecar") is True
-assert is_palindrome("hello") is False
-assert is_palindrome("") is True
-print("tests ok")
-"""
-
+# ---------------- Run the benchmark ----------------
+def run_task(agent, item: dict) -> dict:
+    """Run one task through the agent and return a result row."""
+    print(f"\n================ {item['name']} ({item['level']}) ================")
+    start = time.time()
     final = agent.invoke(
-        {"task": task, "tests": tests, "code": "", "feedback": "", "attempts": 0, "status": "running"}
+        {"task": item["task"], "tests": item["tests"], "code": "", "feedback": "",
+         "attempts": 0, "status": "running"},
+        {"recursion_limit": 50},
     )
+    status = final["status"] if final["status"] != "running" else "failed"
+    return {
+        "task": item["name"],
+        "level": item["level"],
+        "status": status,
+        "attempts": final["attempts"],
+        "seconds": round(time.time() - start, 1),
+        "code": final["code"],
+    }
 
-    print("\n========== RESULT ==========")
-    print("Status  :", final["status"] if final["status"] != "running" else "failed")
-    print("Attempts:", final["attempts"])
-    print("Code:\n" + final["code"])
+
+def print_summary(rows: list[dict]) -> None:
+    print("\n\n==================== SUMMARY ====================")
+    print(f"{'task':<12}{'level':<8}{'status':<9}{'attempts':>9}{'seconds':>9}")
+    print("-" * 47)
+    for r in rows:
+        print(f"{r['task']:<12}{r['level']:<8}{r['status']:<9}{r['attempts']:>9}{r['seconds']:>9}")
+    print("-" * 47)
+    passed = sum(r["status"] == "passed" for r in rows)
+    first_try = sum(r["status"] == "passed" and r["attempts"] == 1 for r in rows)
+    print(f"Passed: {passed}/{len(rows)}   "
+          f"(first try: {first_try}, fixed by retrying: {passed - first_try})")
+
+
+def save_results(rows: list[dict]) -> str:
+    """Save results to results/<time>.csv so you can compare runs later."""
+    os.makedirs("results", exist_ok=True)
+    path = os.path.join("results", time.strftime("%Y%m%d-%H%M%S") + f"-{MODEL.replace(':', '_')}.csv")
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["task", "level", "status", "attempts", "seconds"])
+        writer.writeheader()
+        for r in rows:
+            writer.writerow({k: r[k] for k in writer.fieldnames})
+    return path
+
+
+if __name__ == "__main__":
+    from tasks import TASKS
+
+    parser = argparse.ArgumentParser(description="Self-checking safe coding agent")
+    parser.add_argument("--task", help="run only this task (e.g. roman). Default: all tasks")
+    parser.add_argument("--level", choices=["easy", "medium", "hard"], help="run only this level")
+    parser.add_argument("--max-attempts", type=int, default=MAX_ATTEMPTS,
+                        help="tries per task (use 1 to switch self-checking off)")
+    parser.add_argument("--show-code", action="store_true", help="print the final code of each task")
+    parser.add_argument("--list", action="store_true", help="list task names and exit")
+    args = parser.parse_args()
+
+    if args.list:
+        for t in TASKS:
+            print(f"{t['name']:<12}{t['level']}")
+        sys.exit(0)
+
+    MAX_ATTEMPTS = args.max_attempts
+    selected = [t for t in TASKS
+                if (not args.task or t["name"] == args.task)
+                and (not args.level or t["level"] == args.level)]
+    if not selected:
+        sys.exit(f"No task matched. Use --list to see task names.")
+
+    print(f"Model: {MODEL}   Max attempts: {MAX_ATTEMPTS}   Tasks: {len(selected)}")
+    agent = build_agent()
+    rows = [run_task(agent, t) for t in selected]
+
+    if args.show_code:
+        for r in rows:
+            print(f"\n----- code for {r['task']} ({r['status']}) -----\n{r['code']}")
+
+    print_summary(rows)
+    print(f"Saved: {save_results(rows)}")
