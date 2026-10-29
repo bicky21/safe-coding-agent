@@ -1,0 +1,52 @@
+name: config-parser
+level: project
+files: [conf/parser.py]
+timeout: 60
+prompt: |
+  Write an INI-style config parser in conf/parser.py with:
+      parse(text: str) -> Config
+      class ConfigError(Exception)
+  (conf/__init__.py already re-exports parse, Config and ConfigError.)
+
+  Syntax (one logical line at a time):
+    1. Continuation: a physical line ending with a backslash is joined with the next line: the
+       backslash is removed and the next line is appended with its leading whitespace removed.
+       Errors report the number of the FIRST physical line of the logical line.
+    2. Blank lines are ignored. Lines whose first non-space character is # or ; are comments.
+    3. [name] starts a section. [child : parent] starts a section that inherits every key of
+       parent (and of parent's parents). The parent may be defined before or after the child.
+       Section names keep their case; spaces around names are ignored. A section that appears
+       twice is merged (later keys win).
+    4. key = value. Spaces around key and value are ignored. Keys are case-insensitive (store
+       them lowercase) and must match [A-Za-z_][A-Za-z0-9_-]*. A later key with the same name
+       in the same section wins.
+    5. Inline comments: in an unquoted value, a # that comes after a space or tab starts a comment
+       (so "a#b" stays "a#b").
+    6. Quoted values: if the value starts with ", it ends at the next unescaped ". Inside, \" is a
+       quote, \\ is a backslash, \n is a newline; spaces are kept. After the closing quote only
+       spaces and an inline comment may follow.
+    7. Any other line, a key before the first section, an invalid key, an unterminated quote, or
+       other text after a closing quote is a ConfigError with "line N" in the message.
+
+  After parsing, raise ConfigError if a parent section does not exist (the message must name the
+  missing section) or if inheritance has a cycle (message must contain "cycle").
+
+  Interpolation, done when a value is read:
+    8. ${key} is replaced by that key's value from the section get() was called on, including
+       inherited keys (so a value inherited from a parent sees the CHILD's keys).
+       ${section.key} reads from another section. Replacement is recursive.
+    9. $$ is a literal $. A missing reference is a ConfigError; a reference cycle is a ConfigError
+       whose message contains "cycle".
+
+  Config methods:
+    get(section, key, default=<none>) -> str    key is case-insensitive. Raise KeyError if the
+                                                section or key is missing and no default is given.
+    get_int, get_float(section, key)            int()/float() of the value
+    get_bool(section, key)                      true/yes/on/1 -> True, false/no/off/0 -> False
+                                                (case-insensitive), anything else -> ValueError
+    get_list(section, key) -> list[str]         split on commas, strip items, drop empty items
+    sections() -> list[str]                     in order of first appearance
+    keys(section) -> list[str]                  sorted, including inherited keys;
+                                                KeyError for an unknown section
+
+  Do not use the configparser module.

@@ -1,7 +1,7 @@
 """Command line: `sca`.
 
     sca run TASK_DIR            solve one task (your own or a built-in one)
-    sca bench                   run a whole suite (default: the built-in benchmark)
+    sca bench                   run a whole suite (default: the built-in benchmark; --suite hard)
     sca compare                 compare all saved runs side by side
     sca new-task NAME           create a new task folder from a template
     sca list                    list the tasks in a suite
@@ -24,7 +24,7 @@ from .agent import CodingAgent, Settings, TaskResult
 from .models import ModelError, parse_model, preflight
 from .safety import check_source
 from .sandbox import SANDBOX_IMAGE, SandboxError, build_image, docker_status, get_runner
-from .tasks import TaskError, builtin_suite_dir, load_suite, load_task
+from .tasks import TaskError, load_suite, load_task, resolve_suite
 
 DEFAULT_MODEL = "ollama:gemma3:4b"
 _print_lock = threading.Lock()
@@ -139,12 +139,11 @@ def _select(tasks, a):
 
 
 def cmd_bench(a) -> int:
-    suite_dir = Path(a.suite) if a.suite else builtin_suite_dir()
+    suite_dir, suite_label = resolve_suite(a.suite)
     tasks = _select(load_suite(suite_dir), a)
     settings = make_settings(a)
     preflight(settings.model)
     runner = make_runner(a)
-    suite_label = "builtin" if not a.suite else str(suite_dir.resolve())
     if a.level:
         suite_label += f":{a.level}"
     out(f"Suite: {suite_label} ({len(tasks)} tasks)   Model: {settings.model.label}   Runner: {runner.name}   "
@@ -248,7 +247,7 @@ def cmd_new_task(a) -> int:
 
 
 def cmd_list(a) -> int:
-    suite_dir = Path(a.suite) if a.suite else builtin_suite_dir()
+    suite_dir, _ = resolve_suite(a.suite)
     for t in load_suite(suite_dir):
         out(f"{t.name:<20}{t.level:<10}{t.count_tests():>4} tests   {t.path}")
     return 0
@@ -293,7 +292,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.set_defaults(func=cmd_run)
 
     b = sub.add_parser("bench", help="run a suite of tasks (default: built-in benchmark)")
-    b.add_argument("--suite", help="folder of task folders (default: built-in benchmark)")
+    b.add_argument("--suite", help="built-in suite 'builtin' (default) or 'hard', or a folder of task folders")
     b.add_argument("--level", help="only tasks with this level, e.g. tricky")
     b.add_argument("--task", action="append", help="only this task (repeatable)")
     b.add_argument("--runs", type=int, default=1, help="repeat the whole suite N times")
@@ -312,7 +311,7 @@ def build_parser() -> argparse.ArgumentParser:
     n.set_defaults(func=cmd_new_task)
 
     ls = sub.add_parser("list", help="list tasks in a suite")
-    ls.add_argument("--suite", help="folder of task folders (default: built-in benchmark)")
+    ls.add_argument("--suite", help="built-in suite 'builtin' (default) or 'hard', or a folder of task folders")
     ls.set_defaults(func=cmd_list)
 
     ck = sub.add_parser("check", help="run the safety check on Python files")

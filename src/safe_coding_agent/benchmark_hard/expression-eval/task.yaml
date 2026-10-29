@@ -1,0 +1,33 @@
+name: expression-eval
+level: project
+files: [calc.py]
+timeout: 60
+prompt: |
+  Write calc.py with:
+      evaluate(expr: str, variables: dict | None = None) -> int | float
+      class EvalError(Exception)
+  Do not use eval/exec/compile or the ast module.
+
+  Language
+    1. Numbers: 12, 1_000 (int), 3.5, .5, 2., 1e3, 2.5E-2 (float). An int stays an int.
+    2. Names: letters, digits and _ (not starting with a digit), looked up in variables.
+    3. Operators, from lowest to highest priority:
+           + -  (binary, left to right)
+           * / // %  (left to right)
+           unary + and -
+           **  (right to left, and higher than unary minus: -2**2 == -4, 2**-1 == 0.5)
+       Parentheses group as usual. Results follow Python exactly (/ always gives a float,
+       7 // 2 == 3, -7 // 2 == -4, 7 % -3 == -2, 2 ** 10 == 1024).
+    4. Functions: abs(x), min(a, ...), max(a, ...) (at least 1 argument; max(5) == 5),
+       round(x) and round(x, n), with Python's results.
+    5. Spaces and tabs are ignored.
+
+  Errors: raise EvalError with exactly these messages (positions are 0-based character indexes
+  into expr):
+    "unexpected character 'C' at position P"     a character that cannot start any token
+    "unexpected token 'T' at position P"          a token where it does not belong (T is its text)
+    "unexpected end of expression"                 the input ends too early (also for "")
+    "unknown name 'N' at position P"               a variable that is not in variables
+    "unknown function 'F' at position P"           a call to anything other than the 4 functions
+    "wrong number of arguments for 'F' at position P"   P = position of the function name
+    "division by zero at position P"               for /, // and %; P = position of the operator

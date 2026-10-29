@@ -136,7 +136,10 @@ Testing with real models found problems the scripted tests did not:
 
 ### Next
 
-- A harder benchmark that big models do not saturate (multi-file projects, larger code).
+- A harder benchmark that big models do not saturate: **added as `sca bench --suite hard`**
+  (5 project-style tasks, 154 tests: a template engine, a config parser, recurring events
+  across two files, fixing an existing buggy ledger, and an expression evaluator with exact
+  error messages). Each task's tests are verified against a hidden reference solution.
 - Several runs per setting (`--runs 3`) to separate real effects from run-to-run variation.
 - Mid-size local coding models (e.g. qwen2.5-coder:7b) to find where self-checking stops
   mattering.

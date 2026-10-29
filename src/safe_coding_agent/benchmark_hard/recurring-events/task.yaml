@@ -1,0 +1,41 @@
+name: recurring-events
+level: project
+files: [cal/rules.py, cal/schedule.py]
+timeout: 60
+prompt: |
+  The starter has cal/models.py with an Event dataclass (title, start date, optional rule text,
+  set of exception dates). Write two modules:
+
+  cal/rules.py
+      parse_rule(text: str) -> a rule object of your choice. Raise ValueError for invalid text.
+
+  cal/schedule.py
+      occurrences(event: Event, start: date, end: date) -> list[date]
+      conflicts(events: list[Event], start: date, end: date) -> list[tuple[date, str, str]]
+
+  Rule text (case-insensitive, words separated by single or multiple spaces):
+      daily | every N days
+      weekly | every N weeks                  (on the weekday of event.start)
+      weekly on mon,wed | every N weeks on fri,sat
+      monthly | every N months                (on the day of month of event.start)
+      monthly on day D                        (D = 1..31)
+      monthly on the last fri | monthly on the 2nd tue   (1st, 2nd, 3rd, 4th, last)
+      every N months on day D / on the last fri / on the 3rd mon
+      yearly | every N years                  (on the month and day of event.start)
+    Weekdays: mon tue wed thu fri sat sun (also full names, e.g. monday). N >= 1.
+    Optional ending, at the end of the rule: "until YYYY-MM-DD" (inclusive, must be a real date)
+    or "for N times" (N >= 1).
+
+  occurrences rules:
+    1. No rule: the event happens once, on event.start.
+    2. Never before event.start. event.start itself only counts if it matches the rule
+       (for example "weekly on mon" starting on a Wednesday starts the next Monday).
+    3. "every N weeks": week 0 is the Monday-to-Sunday week containing event.start; only weeks
+       0, N, 2N, ... count. "every N months"/"every N years" count from event.start's month/year.
+    4. "monthly on day 31" skips months without a day 31 (no moving to the last day).
+       "yearly" starting on Feb 29 only happens in leap years.
+    5. Dates in event.exceptions are left out, but they still count toward "for N times".
+    6. Return the dates between start and end (both inclusive), sorted, without duplicates.
+
+  conflicts: every date in [start, end] on which two or more events happen, as
+  (date, title_a, title_b) for each pair with title_a < title_b, sorted.

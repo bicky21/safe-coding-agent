@@ -160,6 +160,8 @@ def load_task(folder: str | os.PathLike) -> Task:
 def load_suite(folder: str | os.PathLike) -> list[Task]:
     """A folder of task folders (or a single task folder)."""
     path = Path(folder)
+    if not path.is_dir():
+        raise TaskError(f"{folder}: no such folder (built-in suites: {', '.join(BUILTIN_SUITES)})")
     if (path / "task.yaml").is_file():
         return [load_task(path)]
     tasks = [load_task(p) for p in sorted(path.iterdir()) if (p / "task.yaml").is_file()]
@@ -168,8 +170,25 @@ def load_suite(folder: str | os.PathLike) -> list[Task]:
     return tasks
 
 
-def builtin_suite_dir() -> Path:
-    return Path(__file__).parent / "benchmark"
+BUILTIN_SUITES = {
+    "builtin": "benchmark",        # 13 short single-function tasks (easy ... tricky)
+    "hard": "benchmark_hard",      # 5 project-style tasks: long exact specs, several files, existing code
+}
+
+
+def builtin_suite_dir(name: str = "builtin") -> Path:
+    if name not in BUILTIN_SUITES:
+        raise TaskError(f"unknown built-in suite {name!r}; choose one of: {', '.join(BUILTIN_SUITES)}")
+    return Path(__file__).parent / BUILTIN_SUITES[name]
+
+
+def resolve_suite(suite: str | None) -> tuple[Path, str]:
+    """A built-in suite name ('builtin', 'hard') or a folder. Returns (folder, label)."""
+    if not suite or suite in BUILTIN_SUITES:
+        name = suite or "builtin"
+        return builtin_suite_dir(name), name
+    path = Path(suite)
+    return path, str(path.resolve())
 
 
 def unsafe_path_reason(rel: str) -> str | None:

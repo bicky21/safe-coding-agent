@@ -148,12 +148,28 @@ past either layer, please open an issue.
 
 ## Benchmarking models and methods
 
-A built-in benchmark of 13 tasks is included: 7 well-known problems (palindrome, LCS,
-Dijkstra, LRU cache...) and 6 **tricky** tasks with unusual exact rules that models can't
-answer from memory.
+Two built-in suites are included:
+
+- **`builtin`** (default, 13 tasks, 86 tests): 7 well-known problems (palindrome, LCS,
+  Dijkstra, LRU cache...) and 6 **tricky** tasks with unusual exact rules that small models
+  can't answer from memory. Models of 20B parameters and up solve nearly all of it.
+- **`hard`** (5 project-style tasks, 154 tests), built for bigger models:
+
+  | Task | What makes it hard |
+  |------|--------------------|
+  | `template-engine` | a mini Jinja: filters, if/for blocks, loop variables, HTML escaping, whitespace control, errors with line numbers |
+  | `config-parser` | INI format with section inheritance, `${...}` interpolation (inherited values resolve against the child), quoting, continuation lines, cycle detection |
+  | `recurring-events` | two files: rule parser + scheduler; every-N-weeks counted by Monday weeks, day 31, Feb 29, "last Friday", counts that include skipped dates |
+  | `inventory-ledger` | **existing buggy code** to fix (LIFO instead of FIFO, float money, stock going negative) without being told what the bugs are, plus new features and an exactly formatted report |
+  | `expression-eval` | operator precedence (`-2**2 == -4`), Python number rules, exact error messages with character positions |
+
+  Every hard task has a reference solution under `tests/hard_reference/` (not shipped in the
+  package, never shown to the agent), and the test suite checks that each reference passes
+  all of its task's tests.
 
 ```bash
-sca list                                          # built-in tasks
+sca list                                          # built-in tasks (sca list --suite hard)
+sca bench --suite hard --runs 3                   # the hard suite
 sca bench --level tricky --runs 3                 # default method
 sca bench --level tricky --runs 3 --plan          # plan-first
 sca bench --level tricky --runs 3 --feedback simple

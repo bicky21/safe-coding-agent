@@ -1,0 +1,34 @@
+name: inventory-ledger
+level: project
+files: [inv/ledger.py, inv/report.py]
+timeout: 60
+prompt: |
+  inv/ledger.py is an existing stock ledger that users say gives wrong numbers. Fix it and
+  extend it so that it follows ALL of these rules. Keep the existing class and method names.
+
+  Ledger
+    receive(sku, qty, unit_cost)
+        Adds a new lot. qty must be a positive int (not bool), otherwise ValueError.
+        unit_cost may be an int, a str like "1.25", or a Decimal; a float is a TypeError and a
+        negative cost is a ValueError. Money is always handled as Decimal.
+    sell(sku, qty) -> Decimal
+        Removes qty units, oldest lots first (FIFO), and returns the cost of the units removed,
+        rounded to cents with ROUND_HALF_UP (round only the total, not each lot).
+        If qty is more than the stock, raise InsufficientStock and change nothing.
+        qty must be a positive int, otherwise ValueError.
+    stock(sku) -> int                  units left (0 for an unknown sku)
+    value(sku) -> Decimal              sum of qty * unit_cost of the remaining lots, rounded to
+                                       cents (Decimal("0.00") for an unknown sku)
+    transfer(sku, qty, other) -> Decimal   NEW. Moves qty units to the Ledger `other`, oldest
+                                       first, keeping each unit's cost: the moved parts become new
+                                       lots in `other` in the same order. Returns their total cost
+                                       (rounded like sell). Same errors as sell; nothing changes on error.
+    skus() -> list[str]                NEW. sorted SKUs that have stock > 0
+
+  inv/report.py (NEW)
+    valuation_report(ledger) -> str
+        One line per SKU from ledger.skus(), then a TOTAL line, after a header:
+            f"{'SKU':<10}{'QTY':>6}{'VALUE':>14}"
+            f"{sku:<10}{qty:>6}{value:>14,.2f}"
+            f"{'TOTAL':<10}{total_qty:>6}{total_value:>14,.2f}"
+        Lines are joined with "\n" and there is no newline at the end.

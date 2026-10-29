@@ -41,7 +41,7 @@ Homepage = "https://github.com/bicky21/safe-coding-agent"
 where = ["src"]
 
 [tool.setuptools.package-data]
-safe_coding_agent = ["benchmark/**/*", "Dockerfile.sandbox"]
+safe_coding_agent = ["benchmark/**/*", "benchmark_hard/**/*", "Dockerfile.sandbox"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -49,7 +49,8 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-extend-exclude = ["legacy", "src/safe_coding_agent/benchmark", "examples"]
+extend-exclude = ["legacy", "src/safe_coding_agent/benchmark", "src/safe_coding_agent/benchmark_hard",
+                  "examples", "tests/hard_reference"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B"]

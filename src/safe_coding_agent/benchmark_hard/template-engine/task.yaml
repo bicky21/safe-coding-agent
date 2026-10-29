@@ -1,0 +1,46 @@
+name: template-engine
+level: project
+files: [tmpl/engine.py]
+timeout: 60
+prompt: |
+  Implement a small template engine in tmpl/engine.py with:
+      render(template: str, context: dict) -> str
+      class TemplateError(Exception)
+  (tmpl/__init__.py already re-exports them.)
+
+  Values: {{ expr }}
+    1. expr is a dotted name (user.name) followed by zero or more filters: {{ name|upper }}.
+       Spaces inside the braces are ignored.
+    2. Each part of a dotted name is looked up as a dict key first, then as an attribute.
+       If any part is missing, the value is "undefined".
+    3. An undefined value counts as "" for every filter except default, and renders as "".
+    4. Filters run left to right:
+         upper, lower, title    string case (the value is converted with str() first)
+         length                 len(value)
+         join:"sep"             sep.join(str(item) for item in value)
+         default:"text"         "text" if the value is undefined, None or ""
+         safe                   do not HTML-escape this value
+       An unknown filter is a TemplateError.
+    5. After the filters, None renders as "", True/False as "true"/"false", anything else str().
+    6. Output of {{ }} is HTML-escaped (unless safe): & < > " ' become &amp; &lt; &gt; &quot; &#39;
+       Plain template text is never escaped.
+
+  Blocks: {% ... %}
+    7. {% if cond %}...{% elif cond %}...{% else %}...{% endif %} (elif and else are optional).
+       cond is a dotted name, optionally "not name". Normal Python truthiness; undefined is false.
+    8. {% for x in items %}...{% else %}...{% endfor %} (else is optional). The else part renders
+       when items is empty, None or undefined. Inside the loop these are available:
+       loop.index (1-based), loop.first, loop.last, loop.length. The loop variable (and loop)
+       hide outer names of the same name only inside the loop. Loops can be nested; loop always
+       refers to the innermost loop.
+    9. {# comment #} produces nothing.
+   10. Whitespace control: a dash just inside the delimiter strips ALL whitespace (spaces, tabs,
+       newlines) on that side of the tag: "{%- " strips before it, " -%}" strips after it, and the
+       same for "{{-" and "-}}".
+
+  Errors: raise TemplateError whose message contains "line N" (N = 1-based line where the tag
+  starts) for: an unclosed {{ or {% or {#, an unknown tag, an unknown filter, an invalid
+  expression, a block that is never closed (N = line of its opening tag), and an else/elif/
+  endif/endfor that does not match an open block (N = line of that tag).
+
+  Do not use any template library (jinja2, string.Template, etc.).
