@@ -1,0 +1,9 @@
+name: rle
+level: tricky
+files: [solution.py]
+timeout: 30
+prompt: |
+  In solution.py, write a function compress(s: str) -> str using run-length encoding with
+  these exact rules: each run of the same character is written as <count><char>; the count
+  is left out when it is 1; a run longer than 9 is split into chunks of at most 9 (so 'a'*12
+  becomes '9a3a' and 'a'*10 becomes '9aa').

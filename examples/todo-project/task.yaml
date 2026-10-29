@@ -1,0 +1,24 @@
+name: todo-project
+level: example
+files: [todo/store.py, todo/report.py]
+timeout: 60
+show_tests: true
+safety: standard
+prompt: |
+  The starter project has a small to-do list library in the `todo` package.
+  `todo/store.py` already has a TodoStore class with add() and items().
+
+  Extend it:
+
+  1. In todo/store.py, add to TodoStore:
+     - complete(item_id: int) -> None: mark the item done. Raise KeyError for an unknown id.
+     - remove(item_id: int) -> None: delete the item. Raise KeyError for an unknown id.
+     - pending() -> list[Item]: items that are not done, highest priority first,
+       then oldest first (lowest id) for equal priority.
+     Keep add() and items() working exactly as they do now.
+
+  2. Create todo/report.py with summary(store: TodoStore) -> str that returns, for example:
+       "3 tasks: 1 done, 2 pending. Next: Buy milk"
+     using "task" (not "tasks") when there is exactly 1 task, and ending with
+     "Nothing pending." instead of "Next: ..." when no task is pending.
+     An empty store gives "0 tasks: 0 done, 0 pending. Nothing pending."

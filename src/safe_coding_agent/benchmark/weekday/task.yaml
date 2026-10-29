@@ -1,0 +1,10 @@
+name: weekday
+level: tricky
+files: [solution.py]
+timeout: 30
+prompt: |
+  In solution.py, write a function nth_weekday(year: int, month: int, weekday: int, n: int)
+  -> int that returns the day of the month of the n-th given weekday (0=Monday ...
+  6=Sunday). n=1 is the first, n=2 the second, n=-1 the last, n=-2 the second last. Raise
+  ValueError if n is 0 or that occurrence does not exist. You may use the calendar or
+  datetime modules.

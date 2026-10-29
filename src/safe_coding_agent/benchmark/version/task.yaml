@@ -1,0 +1,11 @@
+name: version
+level: tricky
+files: [solution.py]
+timeout: 30
+prompt: |
+  In solution.py, write a function compare_versions(a: str, b: str) -> int that returns -1
+  if a < b, 0 if equal, 1 if a > b. Rules: versions are dot-separated numbers compared as
+  integers ('1.10' > '1.9'); missing parts count as 0 ('1.0' == '1'); a version may end with
+  '-<label>' (pre-release), which makes it LOWER than the same version without a label
+  ('1.0-beta' < '1.0'); two labels are compared alphabetically ('1.0-alpha' < '1.0-beta').
+  Numbers are compared before labels.

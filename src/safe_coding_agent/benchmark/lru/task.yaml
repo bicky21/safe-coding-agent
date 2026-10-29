@@ -1,0 +1,8 @@
+name: lru
+level: hard
+files: [solution.py]
+timeout: 30
+prompt: |
+  In solution.py, write a class LRUCache with __init__(self, capacity: int), get(self, key:
+  int) -> int (return -1 if missing) and put(self, key: int, value: int). When full, put
+  must remove the least recently used key. Both get and put count as 'use'.

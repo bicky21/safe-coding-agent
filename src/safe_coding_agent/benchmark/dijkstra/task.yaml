@@ -1,0 +1,9 @@
+name: dijkstra
+level: hard
+files: [solution.py]
+timeout: 30
+prompt: |
+  In solution.py, write a function shortest_paths(n: int, edges: list[tuple[int, int, int]],
+  src: int) -> list[float] for a directed graph with n nodes (0..n-1) and edges (u, v,
+  weight >= 0). Return the shortest distance from src to every node, using float('inf') for
+  unreachable nodes. Use Dijkstra's algorithm with heapq.

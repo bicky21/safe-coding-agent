@@ -1,0 +1,7 @@
+name: palindrome
+level: easy
+files: [solution.py]
+timeout: 30
+prompt: |
+  In solution.py, write a function is_palindrome(s: str) -> bool that returns True if s is a
+  palindrome, ignoring case, spaces and punctuation.

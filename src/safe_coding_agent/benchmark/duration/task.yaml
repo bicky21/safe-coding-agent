@@ -1,0 +1,10 @@
+name: duration
+level: tricky
+files: [solution.py]
+timeout: 30
+prompt: |
+  In solution.py, write a function parse_duration(s: str) -> int that converts a duration
+  like '1h30m' into total seconds. Units are d, h, m, s (case-insensitive). Each unit may
+  appear at most once and only in the order d, h, m, s. Spaces between parts are allowed.
+  Raise ValueError for anything invalid, including an empty string, a number without a unit,
+  a unit without a number, wrong order, or repeated units.

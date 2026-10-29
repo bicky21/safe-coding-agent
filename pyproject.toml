@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "safe-coding-agent"
+version = "1.0.0"
+description = "A self-checking, sandboxed coding agent built with LangGraph: plan, write, safety-check, test, and fix code against your own pytest tests."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "bicky21", email = "bickyy54@gmail.com" }]
+keywords = ["agent", "langgraph", "llm", "coding-agent", "sandbox", "benchmark"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Topic :: Software Development :: Code Generators",
+]
+dependencies = [
+    "langgraph>=1.0",
+    "langchain-core>=1.0",
+    "pyyaml>=6.0",
+    "pytest>=7.0",
+]
+
+[project.optional-dependencies]
+ollama = ["langchain-ollama>=1.0"]
+openai = ["langchain-openai>=1.0"]
+anthropic = ["langchain-anthropic>=1.0"]
+all = ["langchain-ollama>=1.0", "langchain-openai>=1.0", "langchain-anthropic>=1.0"]
+dev = ["ruff>=0.5"]
+
+[project.scripts]
+sca = "safe_coding_agent.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/bicky21/safe-coding-agent"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+safe_coding_agent = ["benchmark/**/*", "Dockerfile.sandbox"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["legacy", "src/safe_coding_agent/benchmark", "examples"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]

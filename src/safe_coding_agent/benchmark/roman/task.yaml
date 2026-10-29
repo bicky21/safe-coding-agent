@@ -1,0 +1,7 @@
+name: roman
+level: easy
+files: [solution.py]
+timeout: 30
+prompt: |
+  In solution.py, write a function roman_to_int(s: str) -> int that converts a Roman numeral
+  like 'MCMXCIV' to an integer.

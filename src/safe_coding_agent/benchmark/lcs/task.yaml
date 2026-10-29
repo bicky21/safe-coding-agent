@@ -1,0 +1,7 @@
+name: lcs
+level: medium
+files: [solution.py]
+timeout: 30
+prompt: |
+  In solution.py, write a function lcs(a: str, b: str) -> str that returns one longest
+  common subsequence of a and b using dynamic programming.

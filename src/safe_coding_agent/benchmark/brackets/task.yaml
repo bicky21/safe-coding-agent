@@ -1,0 +1,7 @@
+name: brackets
+level: medium
+files: [solution.py]
+timeout: 30
+prompt: |
+  In solution.py, write a function is_balanced(s: str) -> bool that returns True if every
+  bracket ( ) [ ] { } in s is correctly opened and closed. Ignore other characters.

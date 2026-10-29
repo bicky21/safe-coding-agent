@@ -1,176 +1,210 @@
-# Self-Checking, Safe Coding Agent (v0.5)
+# Safe Coding Agent
 
-A LangGraph coding agent that writes Python code, checks it for dangerous actions, runs tests, and fixes its own mistakes (up to 3 tries). Runs free and offline using Gemma through Ollama.
+A self-checking, sandboxed coding agent built with [LangGraph](https://github.com/langchain-ai/langgraph).
 
-## How it works
+You describe what to build and write **pytest tests** that define "correct". The agent plans,
+writes the code (one or many files, on top of your existing code if you want), checks it for
+dangerous operations, runs your tests in a sandbox, reads the failures, and fixes its own
+code until the tests pass or it runs out of attempts.
+
+It works with **local models** (Ollama), **OpenAI-compatible APIs** (OpenAI, Groq,
+OpenRouter, Gemini, LM Studio, vLLM...) and **Anthropic Claude**.
 
 ```
-START -> write_code -> check_repeat --(same code as before)--> write_code
-                           |
-                         (new)
-                           v
-                       check_safety --(blocked)--> END
-                           |
-                        (safe)
-                           v
-                       run_tests --(passed / out of tries)--> END
-                           |
-                        (failed)
-                           v
-                       write_code  (retry with the error message)
+START -> [plan] -> write code -> same as before? -> safety check -> run tests (sandbox) -> done
+            ^                          |                 |                  |
+            +------- retry with the reason (repeat / blocked / failing tests) -----+
 ```
 
-## Setup (step by step)
+## Install
 
-1. Install Ollama from https://ollama.com
-2. Download a Gemma model:
-   ```bash
-   ollama pull gemma3:4b
-   ```
-3. Create a virtual environment and install packages (Python 3.10+):
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
-4. Run the agent:
-   ```bash
-   python agent.py
-   ```
-
-To use a different model: `AGENT_MODEL=gemma3:12b python agent.py`
-
-## Running the benchmark
-
-`tasks.py` has 13 tasks. Each has tests the code must pass.
-
-- **easy / medium / hard** (7 tasks): famous problems like LCS, Dijkstra and LRU cache. Models have seen these many times in training, so they mostly recall the answer (this is called *data contamination*).
-- **tricky** (6 tasks): problems with unusual, exact rules (custom run-length encoding, a counter-clockwise spiral, version strings with pre-release labels...). The model can't copy a famous answer, so these show whether self-checking really helps.
+Python 3.10+.
 
 ```bash
-python agent.py                     # run all tasks
-python agent.py --task roman        # run one task
-python agent.py --level tricky      # run only the tricky tasks
-python agent.py --max-attempts 1    # self-checking OFF (for comparison)
-python agent.py --feedback simple   # raw Python errors only (for comparison)
-python agent.py --no-anti-stuck     # old behaviour: allow repeats, temperature 0
-python agent.py --plan              # plan first, then write code
-python agent.py --runs 3            # repeat everything 3 times, then show the average
-python agent.py --show-code         # also print the final code
-python agent.py --list              # list task names
+git clone https://github.com/bicky21/safe-coding-agent.git
+cd safe-coding-agent
+python3 -m venv venv && source venv/bin/activate
+pip install -e ".[ollama]"        # or [openai], [anthropic], or [all]
 ```
 
-At the end you get a summary table. Two files are saved in `results/`:
-- a `.csv` with the numbers (task, status, attempts, time, settings)
-- a `.log.md` with **every attempt's code and the error the model was shown** - read it to see *why* tasks fail
-
-## Feedback modes
-
-When tests fail, what the agent tells the model matters:
-
-| Mode | What the model is told |
-|------|------------------------|
-| `simple` | the raw Python error, e.g. `AssertionError` on line 7 |
-| `detailed` (default) | which test failed, what the code returned, what was expected, and the values of loop variables |
-
-Example of `detailed` feedback:
-```
-Test failed: assert compress('abc') == 'abc'
-  your code returned: '3a'
-  expected:           'abc'
-```
-
-## Experiments
-
-Run each a few times (model output varies), on the tricky tasks:
-
-| # | Command | What it measures |
-|---|---------|------------------|
-| 1 | `python agent.py --level tricky --max-attempts 1` | no self-checking (baseline) |
-| 2 | `python agent.py --level tricky --feedback simple` | self-checking with raw errors |
-| 3 | `python agent.py --level tricky --feedback detailed` | self-checking with detailed feedback |
-
-| 4 | `python agent.py --level tricky --no-anti-stuck` | detailed feedback, but repeats allowed |
-| 5 | `python agent.py --level tricky --plan` | plan first, then code |
-
-## Fair comparison (v0.5)
-
-"0/6 tasks passed" hides progress: a task passing 5 of 8 tests scores the same as one passing 0. So every run now also reports **tests passed** (partial credit), for the first attempt and for the best attempt:
-- **first try** = what you get *without* self-checking
-- **best** = what you get *with* self-checking
-
-Results also vary from run to run, so run each method several times with `--runs`:
+## Quick start
 
 ```bash
-python agent.py --level tricky --runs 3                     # anti-stuck + detailed feedback
-python agent.py --level tricky --runs 3 --plan              # plan-first
-python agent.py --level tricky --runs 3 --feedback simple   # anti-stuck + simple feedback
-python compare.py --level tricky                            # all methods side by side
+# 1. a model (local and free)
+ollama pull gemma3:4b
+
+# 2. try the built-in multi-file example
+sca run examples/todo-project
+
+# 3. or make your own task
+sca new-task my-task
+#    edit my-task/task.yaml and my-task/tests/, then:
+sca run my-task --out my-task/solution
 ```
 
-`compare.py` groups every run in `results/` by its settings and shows the average and the range ("best range"). If two methods differ by less than their range, the difference is probably luck. Older runs are re-scored from their log files automatically.
+Every run is saved in `sca-runs/` with a readable log of every attempt and the **best code
+it produced** (`solutions/`). `--out DIR` also copies the best code wherever you want.
 
-Runs without anti-stuck (`--max-attempts 1`, `--no-anti-stuck`) use temperature 0, so repeating them gives (almost) the same result; one run of those is enough.
+## Choosing a model
 
-## Plan-first mode (`--plan`)
+```bash
+sca run my-task --model ollama:gemma3:4b                       # local (default)
+sca run my-task --model ollama:qwen2.5-coder:14b
 
-Before writing any code, the model writes a plan with three parts:
-- **RULES**: every rule from the task as a numbered list
-- **EXAMPLES**: 3 small inputs worked by hand, step by step
-- **STEPS**: the algorithm
+export ANTHROPIC_API_KEY=sk-ant-...
+sca run my-task --model anthropic:claude-sonnet-5-5
 
-The code is then written from that plan. When a test fails, the model goes back to the **plan**: it works through the failing input by hand, finds which rule or step was wrong, and writes a corrected plan. This targets finding 7: retries that only patch code instead of rethinking the approach. The log file shows each plan next to its code.
+export OPENAI_API_KEY=sk-...
+sca run my-task --model openai:gpt-4o-mini
 
-Then run `python analyze.py` to see, for every task, each attempt's error and which attempts were copies of an earlier one.
+export GROQ_API_KEY=gsk_...                                    # any OpenAI-compatible API
+sca run my-task --model openai:llama-3.3-70b-versatile \
+    --base-url https://api.groq.com/openai/v1 --api-key-env GROQ_API_KEY
 
-## Findings so far (gemma3:4b)
+sca run my-task --model openai:local-model --base-url http://localhost:1234/v1   # LM Studio
+```
 
-| Run | Tricky tasks passed |
-|-----|---------------------|
-| No self-checking (`--max-attempts 1`) | 0/6 |
-| Self-checking, simple feedback | 1/6 (twice) |
-| Self-checking, detailed feedback | 0/6 |
-| v0.3 detailed, anti-stuck OFF | 0/6 (stuck: 4 of 12 retries, 33%) |
-| v0.3 detailed, anti-stuck ON | 0/6 (stuck: 1 of 12 retries, 8%) |
-| v0.4 plan-first (`--plan`) | 0/6, but more tests passed inside tasks (see 8) |
+Set a default with `export SCA_MODEL=anthropic:claude-sonnet-5-5`. Remote Ollama:
+`--base-url http://host:11434` (or `OLLAMA_HOST`). Bigger Ollama context window:
+`export SCA_OLLAMA_NUM_CTX=32768`.
 
-1. **Famous problems are solved from memory.** All 7 easy/medium/hard tasks passed on the first try. Tasks with unusual rules mostly fail.
-2. **The agent got stuck repeating itself.** With `temperature=0`, once the model repeats its code, the next prompt is word-for-word the same, so the answer is the same again. 7 of 23 retries (30%) were identical copies of an earlier attempt (`python analyze.py`). v0.3 adds `check_repeat` and higher temperature on retries to fix this.
-3. **The model ignores exact rules** and falls back to the famous version (e.g. a clockwise spiral when the task says "go DOWN first").
-4. **Fixes often touch the wrong part** of the code, or fix one bug and add another.
-5. The simple vs detailed difference (1 task) is within run-to-run noise; more runs are needed.
-6. **Anti-stuck works, but is not enough.** It cut repeated code from 33% to 8% and made attempts more varied (some got further, e.g. weekday passed its first tests on attempt 3), but still 0/6 passed.
-7. **The first idea anchors everything.** The model copies the task rules into its docstring, then writes code that ignores them (rle keeps writing `1a1b1c`). In duration, every attempt keeps the same wrong core idea (split the text into 4 parts) and only adds checks around it. Retries make small edits; they never rethink the approach. Next: make the model plan before coding, and test a bigger model.
-8. **Plan-first helps a little, but shows a new gap.** Still 0/6, but some tasks got further than ever: rle attempt 3 finally followed "leave out the count when it is 1" and passed 5 of 8 tests (failing only the "split runs longer than 9" rule), and weekday passed its first tests. Three new problems showed up:
-   - **Wrong hand-worked examples:** the plan's EXAMPLES had arithmetic mistakes (e.g. `"1h30m" -> 90` instead of 5400).
-   - **Steps miss rules:** rle's plan listed the split-at-9 rule and even the right example output (`9aa`), but its STEPS never did the splitting, so the code didn't either.
-   - **Code ignores the plan:** duration's plan said to split on the unit letters, but the code still split on spaces into 4 parts, the same wrong idea as every earlier run. Spiral's code still went right first, the famous version.
-   A small model (4B) can write a reasonable plan, but doesn't reliably compute examples or follow its own plan.
-9. **Fair comparison, 3+ runs per method (v0.5, partial-credit scores, 43 tests on the tricky tasks).**
+## Writing a task
 
-   | Method | Runs | First try | Best (avg) | Best range | Time per run |
-   |--------|------|-----------|------------|------------|--------------|
-   | Plan-first + anti-stuck, detailed | 4 | **14/43** | **18.8/43** | 18-21 | ~13 min |
-   | Anti-stuck, detailed feedback | 4 | 11/43 | 16.5/43 | 15-18 | ~3.3 min |
-   | Anti-stuck, simple feedback | 3 | 11/43 | 15.0/43 | 15-15 | ~3.6 min |
+A task is a folder:
 
-   - **Self-checking always helps:** every method gains +4 to +8 tests over its first try.
-   - **Plan-first scores best and is the only method that improves the first try** (14 vs 11). Its worst run (18) equals the other methods' best run, so the gain is consistent, but small (+2.3 tests) and it costs ~4x the time.
-   - **The gain is uneven:** plan-first helps a lot on rle (5 vs 3 of 8) and weekday (5 vs 1-4 of 8), but hurts wrap (2 vs 4 of 7). duration is stuck at 1/6 for every method.
-   - **Detailed vs simple feedback:** 16.5 vs 15.0, a small difference.
-   - **Repeats still happen:** even with higher retry temperatures, about 28% of retries (10 of 36 per method) were copies of an earlier attempt. Anti-stuck catches them, but they still use up an attempt.
-   - **Runs barely vary.** Most tasks score the same in every run, so more runs of the same 6 tasks add little. More (and more varied) tasks would make the comparison stronger than more runs.
+```
+my-task/
+  task.yaml       what to build + settings
+  tests/          pytest tests that decide if the code is correct (the model can't change them)
+  starter/        optional: existing code the model works on (copied into the sandbox)
+```
+
+`task.yaml`:
+
+```yaml
+name: my-task
+prompt: |
+  Add a `search(query)` method to `library/catalog.py` that ...
+files: [library/catalog.py, library/search.py]   # files the model is expected to write
+timeout: 60             # seconds for one test run
+show_tests: false       # true = the model can read the tests (like test-driven development)
+safety: standard        # standard | strict | off
+allow_imports: []       # modules your task really needs, e.g. [subprocess]
+level: custom           # any tag; filter with: sca bench --level ...
+```
+
+The prompt can also live in a `task.md` file. See [`examples/todo-project`](examples/todo-project)
+for a complete multi-file task with starter code.
+
+**Bigger code bases:** everything in `starter/` is shown to the model, up to
+`--context-chars` (default 120,000 characters, about 30k tokens); files beyond that are listed
+by name only. Put the files that matter in `starter/`, and use a model with a large context
+window for big projects.
+
+## Safety
+
+Model-written code is treated as untrusted. There are two layers:
+
+**1. Static safety check (before any code runs).** The agent reads the code's structure
+(Python AST, not text matching, so tricks like `getattr(os, "sys" + "tem")` are caught) and
+blocks it before it is executed. The model is told why and tries again.
+
+| Level | Blocks |
+|-------|--------|
+| `standard` (default) | network, starting programs (`subprocess`, `os.system`, `os.exec*`...), deleting/moving files, `eval`/`exec`/`importlib`, sandbox-escape tricks (`__subclasses__`, `__globals__`, frame objects...) |
+| `strict` | all of the above, plus writing files, `sys`/`pathlib`/`inspect`, computed `getattr`, `os.environ`, object internals like `__dict__` |
+| `off` | nothing (rely on the sandbox only) |
+
+Check your own files: `sca check myfile.py --safety strict`.
+
+**2. Sandbox (where the tests run).**
+
+| Runner | Isolation |
+|--------|-----------|
+| `docker` (**recommended for untrusted models**) | throw-away container: no network, read-only file system, no Linux capabilities, never root, memory/CPU/process limits |
+| `local` | subprocess in a temp folder, clean environment (your API keys are *not* passed in), killed on timeout, CPU/file-size limits. Runs as your user: fine for your own experiments, **not** strong isolation |
+
+```bash
+sca sandbox build           # once (add packages your tasks need: --package numpy)
+sca sandbox status
+sca run my-task --runner docker
+```
+
+The default `--runner auto` uses Docker when the image is built, and otherwise falls back to
+`local` with a warning.
+
+A static check can never be perfect, which is why the sandbox exists. If you find a way
+past either layer, please open an issue.
+
+## Benchmarking models and methods
+
+A built-in benchmark of 13 tasks is included: 7 well-known problems (palindrome, LCS,
+Dijkstra, LRU cache...) and 6 **tricky** tasks with unusual exact rules that models can't
+answer from memory.
+
+```bash
+sca list                                          # built-in tasks
+sca bench --level tricky --runs 3                 # default method
+sca bench --level tricky --runs 3 --plan          # plan-first
+sca bench --level tricky --runs 3 --feedback simple
+sca bench --suite path/to/my-tasks --jobs 4       # your own suite, 4 tasks in parallel (API models)
+sca compare                                       # every method side by side
+```
+
+Each result reports tests passed on the **first try** (= without self-checking) and by the
+**best attempt** (= with self-checking), so partial progress is visible, not just pass/fail.
+
+| Option | Effect |
+|--------|--------|
+| `--max-attempts N` | tries per task (1 = no self-checking) |
+| `--plan` | plan first: rules, hand-worked examples, steps; failures fix the plan |
+| `--feedback detailed/simple` | full pytest failure output, or failing test names only |
+| `--no-anti-stuck` | don't catch repeated code; keep temperature 0 on retries |
+| `--safety` | override every task's safety level |
+| `--runs N` / `--jobs N` | repeat N times / run N tasks in parallel |
+
+## Research findings
+
+This project started as a research question: does a self-checking loop help a small local
+model, and which loop design helps most? Short answer with gemma3:4b: self-checking added
++4 to +8 passed tests on the tricky tasks for every method; planning first gave the best
+results (and was the only method that improved the first try) but took ~4x longer; and the
+model often got stuck repeating itself until repeat detection was added.
+
+Full experiments, numbers and analysis: [docs/RESEARCH.md](docs/RESEARCH.md).
+
+## Use it from Python
+
+```python
+from safe_coding_agent import CodingAgent, Settings, load_task, parse_model
+from safe_coding_agent.sandbox import get_runner
+
+task = load_task("my-task")
+runner, _ = get_runner("auto")
+result = CodingAgent(task, Settings(model=parse_model("ollama:gemma3:4b"), plan_first=True), runner).run()
+print(result.status, f"{result.best_passed}/{result.total}")
+print(result.best_files)          # {"path": "code", ...}
+```
+
+## Development
+
+```bash
+pip install -e ".[all,dev]"
+pytest -q                 # 120+ tests, no model or API key needed (a scripted fake model is used)
+ruff check src tests
+```
+
+The Docker isolation tests run when the sandbox image is built (`sca sandbox build`).
 
 ## Roadmap
 
-- [x] v0.1 Write -> safety check -> test -> retry loop
-- [x] v0.1.1 Benchmark of 7 tasks, summary table, CSV results
-- [x] v0.1.2 6 "tricky" tasks with unusual rules (to avoid data contamination)
-- [x] v0.2 Detailed test feedback (which test, got vs expected) + attempt log
-- [x] v0.3 Anti-stuck: detect repeated code, raise temperature on retries, list earlier errors; `analyze.py`
-- [x] v0.4 Plan-first mode: rules + worked examples + steps before code; retries fix the plan
-- [x] v0.5 Partial-credit test scores, `--runs N`, `compare.py`
-- [ ] v0.6 Replace regex safety check with Python AST checks
-- [ ] v0.7 Run tests inside Docker (real sandbox)
-- [ ] v0.8 Human-in-the-loop approval for risky actions (LangGraph `interrupt`)
-- [ ] v0.9 Prompt-injection test set + measure attacks blocked
+- [x] Self-checking loop, detailed feedback, anti-stuck, plan-first (research v0.1-v0.5)
+- [x] v1.0: installable CLI, your own multi-file tasks with pytest, Ollama / OpenAI-compatible / Anthropic,
+  AST safety check, Docker sandbox, partial-credit benchmark and comparison
+- [ ] Repo mode: work directly on an existing project folder instead of a task folder
+- [ ] Human-in-the-loop approval for risky actions (LangGraph `interrupt`)
+- [ ] Prompt-injection test set: hostile instructions hidden in starter files and test output
+
+## License
+
+MIT

@@ -1,0 +1,8 @@
+name: intervals
+level: medium
+files: [solution.py]
+timeout: 30
+prompt: |
+  In solution.py, write a function merge_intervals(intervals: list[list[int]]) ->
+  list[list[int]] that merges all overlapping intervals and returns them sorted by start.
+  Intervals that only touch, like [1,2] and [2,3], also merge.

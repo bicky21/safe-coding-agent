@@ -1,0 +1,11 @@
+name: wrap
+level: tricky
+files: [solution.py]
+timeout: 30
+prompt: |
+  In solution.py, write a function wrap_text(text: str, width: int) -> list[str] that splits
+  text on any whitespace into words and packs them greedily into lines of at most width
+  characters, with words joined by one space. A word longer than width is cut into pieces of
+  exactly width characters, each piece on its own line, except the last (shorter or equal)
+  piece, which starts a new line that later words may join. Empty or whitespace-only text
+  returns [].

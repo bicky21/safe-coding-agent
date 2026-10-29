@@ -1,0 +1,8 @@
+name: spiral
+level: tricky
+files: [solution.py]
+timeout: 30
+prompt: |
+  In solution.py, write a function spiral_ccw(n: int) -> list[list[int]] that returns an n x
+  n matrix filled with 1..n*n in a COUNTER-clockwise spiral: start at the top-left corner,
+  go DOWN first, then right, then up, then left, moving inward. spiral_ccw(0) returns [].
