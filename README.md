@@ -99,12 +99,16 @@ Then run `python analyze.py` to see, for every task, each attempt's error and wh
 | No self-checking (`--max-attempts 1`) | 0/6 |
 | Self-checking, simple feedback | 1/6 (twice) |
 | Self-checking, detailed feedback | 0/6 |
+| v0.3 detailed, anti-stuck OFF | 0/6 (stuck: 4 of 12 retries, 33%) |
+| v0.3 detailed, anti-stuck ON | 0/6 (stuck: 1 of 12 retries, 8%) |
 
 1. **Famous problems are solved from memory.** All 7 easy/medium/hard tasks passed on the first try. Tasks with unusual rules mostly fail.
 2. **The agent got stuck repeating itself.** With `temperature=0`, once the model repeats its code, the next prompt is word-for-word the same, so the answer is the same again. 7 of 23 retries (30%) were identical copies of an earlier attempt (`python analyze.py`). v0.3 adds `check_repeat` and higher temperature on retries to fix this.
 3. **The model ignores exact rules** and falls back to the famous version (e.g. a clockwise spiral when the task says "go DOWN first").
 4. **Fixes often touch the wrong part** of the code, or fix one bug and add another.
 5. The simple vs detailed difference (1 task) is within run-to-run noise; more runs are needed.
+6. **Anti-stuck works, but is not enough.** It cut repeated code from 33% to 8% and made attempts more varied (some got further, e.g. weekday passed its first tests on attempt 3), but still 0/6 passed.
+7. **The first idea anchors everything.** The model copies the task rules into its docstring, then writes code that ignores them (rle keeps writing `1a1b1c`). In duration, every attempt keeps the same wrong core idea (split the text into 4 parts) and only adds checks around it. Retries make small edits; they never rethink the approach. Next: make the model plan before coding, and test a bigger model.
 
 ## Roadmap
 
