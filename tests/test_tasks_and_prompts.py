@@ -118,3 +118,32 @@ def test_feedback_modes():
     simple = feedback_text(res, "simple")
     assert "tests.test_a.test_x" in simple and "FAILURES" not in simple
     assert "timed out" in feedback_text(RunResult(timed_out=True), "detailed")
+
+
+TWO_FILES = "[pkg/store.py, pkg/report.py]"
+S, R = "class Store:\n    pass", "def summary(store):\n    return ''"
+
+
+@pytest.mark.parametrize("text", [
+    f"**pkg/store.py**\n```python\n{S}\n```\n\n**pkg/report.py**\n\n```python\n{R}\n```",
+    f"### `pkg/store.py`\n```python\n{S}\n```\n### `pkg/report.py`\n```python\n{R}\n```",
+    f"1. `pkg/store.py`:\n```python\n{S}\n```\n2. `pkg/report.py`:\n```python\n{R}\n```",
+    f"```python pkg/store.py\n{S}\n```\n```python:pkg/report.py\n{R}\n```",
+    f'```python title="pkg/store.py"\n{S}\n```\n```python title="pkg/report.py"\n{R}\n```',
+    f"```python\n# pkg/store.py\n{S}\n```\n```python\n# File: pkg/report.py\n{R}\n```",
+    f"Updated `pkg/store.py`:\n```python\n{S}\n```\nAnd the new pkg/report.py file:\n```python\n{R}\n```",
+    f"```python\n{R}\n```\n```python\n{S}\n```",          # no names: matched by content
+], ids=["bold", "heading", "numbered", "fence-info", "title", "comment", "prose", "by-content"])
+def test_parse_many_naming_styles(make_task, text):
+    tests = "from pkg.store import Store\nfrom pkg.report import summary\n\ndef test_x():\n    pass\n"
+    task = load_task(make_task(tests, files=TWO_FILES, starter={"pkg/__init__.py": "", "pkg/store.py": S}))
+    files, problems = parse_files(text, task)
+    assert problems == []
+    assert files["pkg/store.py"].startswith("class Store") or files["pkg/store.py"].startswith("# pkg")
+    assert "def summary" in files["pkg/report.py"]
+
+
+def test_parse_unnamed_blocks_ambiguous(make_task):
+    task = load_task(make_task(ADD_TESTS, files=TWO_FILES))
+    files, problems = parse_files("```python\nx = 1\n```\n```python\ny = 2\n```", task)
+    assert files == {} and "no file names" in problems[0]

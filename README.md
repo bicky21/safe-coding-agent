@@ -42,8 +42,8 @@ sca new-task my-task
 sca run my-task --out my-task/solution
 ```
 
-Every run is saved in `sca-runs/` with a readable log of every attempt and the **best code
-it produced** (`solutions/`). `--out DIR` also copies the best code wherever you want.
+Every run is saved in `sca-runs/` with a readable log of every attempt (`log.md`, including
+the model's raw reply when it couldn't be used) and the **best code it produced** (`solutions/`). `--out DIR` also copies the best code wherever you want.
 
 ## Choosing a model
 
@@ -156,7 +156,7 @@ Each result reports tests passed on the **first try** (= without self-checking) 
 
 | Option | Effect |
 |--------|--------|
-| `--max-attempts N` | tries per task (1 = no self-checking) |
+| `--max-attempts N` | real tries per task (1 = no self-checking). Answers that can't be used and exact repeats don't count, up to 2x N model calls |
 | `--plan` | plan first: rules, hand-worked examples, steps; failures fix the plan |
 | `--feedback detailed/simple` | full pytest failure output, or failing test names only |
 | `--no-anti-stuck` | don't catch repeated code; keep temperature 0 on retries |

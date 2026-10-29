@@ -125,3 +125,22 @@ def test_safety_override(make_task, script, model_spec):
     assert run(make_task(ADD_TESTS), model_spec).status == "passed"
     script.replies = [reply(code)]
     assert run(make_task(ADD_TESTS), model_spec, safety="strict", max_attempts=1).status == "blocked"
+
+
+def test_invalid_and_repeat_do_not_use_up_attempts(make_task, script, model_spec):
+    script.replies = ["no code here", reply(BAD), reply(BAD), reply(GOOD)]
+    r = run(make_task(ADD_TESTS), model_spec, max_attempts=2)
+    assert [a.status for a in r.attempts] == ["invalid", "failed", "repeat", "passed"]
+    assert r.status == "passed"
+
+
+def test_wasted_attempts_are_capped(make_task, script, model_spec):
+    script.replies = ["no code"] * 10
+    r = run(make_task(ADD_TESTS), model_spec, max_attempts=2)
+    assert len(r.attempts) == 4 and r.status == "failed"   # at most 2x max_attempts model calls
+
+
+def test_raw_reply_is_kept(make_task, script, model_spec):
+    script.replies = ["I think the answer is 42.", reply(GOOD)]
+    r = run(make_task(ADD_TESTS), model_spec)
+    assert r.attempts[0].reply == "I think the answer is 42."

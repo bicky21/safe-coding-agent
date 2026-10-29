@@ -91,6 +91,8 @@ def save(run_dir: Path, runs: list[list[TaskResult]], settings: dict, suite: str
                     for path, text in a.files.items():
                         f.write(f"File `{path}`:\n\n" + _fence(text, "python" if path.endswith(".py") else "") + "\n")
                     f.write("Feedback:\n\n" + _fence(a.feedback, "") + "\n")
+                    if a.status == "invalid" and a.reply:
+                        f.write("Raw model reply (could not be used):\n\n" + _fence(a.reply, "text") + "\n")
 
     for k, rs in enumerate(runs, 1):
         for r in rs:

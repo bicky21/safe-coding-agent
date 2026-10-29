@@ -27,7 +27,8 @@ from .tasks import Task
 @dataclass
 class Settings:
     model: ModelSpec
-    max_attempts: int = 3
+    max_attempts: int = 3                 # real attempts (tested or blocked); invalid answers and
+                                          # repeats don't count, up to 2x this many model calls
     feedback: str = "detailed"            # detailed | simple
     anti_stuck: bool = True               # catch repeated code, raise temperature on retries
     plan_first: bool = False              # write a plan before each code attempt
@@ -58,14 +59,20 @@ class Attempt:
     plan: str = ""
     seconds: float = 0.0
     violations: list[str] = field(default_factory=list)
+    reply: str = ""                  # the model's raw answer (kept for debugging)
 
     def to_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
 
 
+REAL = ("passed", "failed", "blocked")      # attempt kinds that use up one of max_attempts
+REPLY_LIMIT = 20_000
+
+
 class State(TypedDict, total=False):
     files: dict[str, str]        # the model's current version of every file it wrote
     new_files: dict[str, str]    # files from the latest reply
+    reply: str                   # the latest raw reply
     plan: str
     feedback: str
     attempts: list[Attempt]
@@ -94,7 +101,8 @@ class CodingAgent:
         attempt = Attempt(number=self._n(state) + 1, status=status,
                           files=dict(state.get("new_files", {})), feedback=feedback,
                           plan=state.get("plan", "") if self.s.plan_first else "",
-                          seconds=round(time.time() - state.get("started", time.time()), 1), **extra)
+                          seconds=round(time.time() - state.get("started", time.time()), 1),
+                          reply=state.get("reply", "")[:REPLY_LIMIT], **extra)
         return {"attempts": state.get("attempts", []) + [attempt], "feedback": feedback,
                 "status": status, "started": time.time()}
 
@@ -121,11 +129,12 @@ class CodingAgent:
         files, problems = prompts.parse_files(reply, self.task)
         if problems and not files:
             fb = ("Your answer could not be used: " + "; ".join(problems) + ".\n\n" + prompts.OUTPUT_FORMAT)
-            self.say(f"attempt {n}: invalid answer ({'; '.join(problems)[:80]})")
-            return {"new_files": {}, **self._record({**state, "new_files": {}}, "invalid", fb)}
+            self.say(f"attempt {n}: invalid answer ({'; '.join(problems)[:80]}) - not counted, retrying")
+            return {"new_files": {}, "reply": reply,
+                    **self._record({**state, "new_files": {}, "reply": reply}, "invalid", fb)}
         if problems:
             self.say(f"attempt {n}: ignored {len(problems)} file(s): {'; '.join(problems)[:80]}")
-        return {"new_files": files, "status": "written"}
+        return {"new_files": files, "reply": reply, "status": "written"}
 
     def check_repeat(self, state: State) -> dict:
         if not self.s.anti_stuck:
@@ -135,7 +144,7 @@ class CodingAgent:
             if a.status in ("invalid",):
                 continue
             if a.files and {**state.get("files", {}), **a.files} == merged and a.files == state["new_files"]:
-                self.say(f"attempt {self._n(state) + 1}: same code as attempt {a.number}")
+                self.say(f"attempt {self._n(state) + 1}: same code as attempt {a.number} - not counted, retrying")
                 fb = (f"You returned EXACTLY the same code as attempt {a.number}, which already failed:\n"
                       f"{a.feedback}\n\nDo not repeat it. Rethink the approach and write a DIFFERENT solution.")
                 return self._record(state, "repeat", fb, passed=a.passed, total=a.total)
@@ -169,7 +178,10 @@ class CodingAgent:
         return "plan" if self.s.plan_first else "write_code"
 
     def _after_attempt(self, state: State) -> str:
-        if state.get("status") == "passed" or self._n(state) >= self.s.max_attempts:
+        attempts = state.get("attempts", [])
+        real = sum(a.status in REAL for a in attempts)
+        if state.get("status") == "passed" or real >= self.s.max_attempts \
+                or len(attempts) >= 2 * self.s.max_attempts:
             return "done"
         return "retry"
 
@@ -204,9 +216,9 @@ class CodingAgent:
     def run(self) -> "TaskResult":
         start = time.time()
         state: State = self.graph.invoke(
-            {"files": {}, "new_files": {}, "plan": "", "feedback": "", "attempts": [], "status": "",
+            {"files": {}, "new_files": {}, "reply": "", "plan": "", "feedback": "", "attempts": [], "status": "",
              "started": start},
-            {"recursion_limit": 10 * self.s.max_attempts + 10})
+            {"recursion_limit": 20 * self.s.max_attempts + 10})
         return TaskResult.from_attempts(self.task, state.get("attempts", []), time.time() - start)
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 
 from .sandbox import RunResult, summarize_output
@@ -119,32 +120,119 @@ def first_line(text: str) -> str:
 
 
 # ---------------------------------------------------------------- parsing replies
+#
+# Models name their files in many ways. All of these are understood:
+#
+#   FILE: todo/store.py            **todo/store.py**             ### `todo/store.py`
+#   ```python                      ```python                     ```python
+#
+#   ```python todo/store.py        ```python:todo/store.py       ```python title="todo/store.py"
+#
+#   ```python
+#   # todo/store.py                (or "# File: todo/store.py" as the first line in the block)
 
-_FILE_BLOCK = re.compile(
-    r"(?:^|\n)[ \t]*(?:[#>*_ ]*)(?:file|path)\s*[:=]\s*[*_`\"']*([^\s*`\"']+)[*_`\"']*[ \t]*\n+"
-    r"[ \t]*```[^\n]*\n(.*?)\n[ \t]*```",
-    re.IGNORECASE | re.DOTALL,
-)
-_ANY_BLOCK = re.compile(r"```([^\n]*)\n(.*?)\n```", re.DOTALL)
+_FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})([^\n]*)\n(.*?)\n[ \t]*\1[ \t]*$", re.MULTILINE | re.DOTALL)
+_PATH = r"[A-Za-z0-9_./][A-Za-z0-9_./-]*\.[A-Za-z0-9]+"   # leading ./ or ../ allowed: refused later
+_LABEL_LINE = re.compile(
+    r"^[ \t>*#_\-\d.)]*(?:(?:file(?:name)?|path)\s*[:=]\s*)?[*_`\"']*(" + _PATH + r")[*_`\"']*[ \t]*:?[ \t*_]*$",
+    re.IGNORECASE)
+_INFO_PATH = re.compile(r"(?:title\s*=\s*[\"']?|:|\s)(" + _PATH + r")[\"']?\s*$")
+_COMMENT_PATH = re.compile(r"^\s*(?:#|//)\s*(?:(?:file(?:name)?|path)\s*[:=]\s*)?(" + _PATH + r")\s*$",
+                           re.IGNORECASE)
+_CODE_LANGS = {"", "python", "py", "python3"}
+
+
+def _path_before(text: str, start: int, known: set[str]) -> str | None:
+    """A file name on the last non-empty line just before a code block: either the whole line
+    ("**todo/store.py**") or, inside a sentence ("Updated `todo/store.py`:"), a known project file."""
+    lines = text[:start].rstrip("\n").split("\n")
+    for line in reversed(lines[-3:]):
+        if not line.strip():
+            continue
+        m = _LABEL_LINE.match(line)
+        if m:
+            return m.group(1)
+        mentioned = {p.strip("./") if p.startswith("./") else p for p in re.findall(_PATH, line)}
+        hits = [p for p in mentioned if p in known]
+        return hits[0] if len(hits) == 1 else None
+    return None
+
+
+def _top_level_names(code: str) -> set[str]:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return set(re.findall(r"^(?:def|class)\s+(\w+)", code, re.MULTILINE))
+    return {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+
+
+def _match_unnamed(blocks: list[str], task: Task) -> dict[str, str]:
+    """Several code blocks without names, one per expected file: match them by content
+    (a block defining TodoStore belongs to the file that already defines TodoStore, or whose
+    tests import it). Returns {} when the match is not clear."""
+    if len(blocks) != len(task.files) or len(blocks) < 2:
+        return {}
+    starter = task.starter_files()
+    tests = "\n".join(task.test_files().values())
+    expected: dict[str, set[str]] = {}
+    for f in task.files:
+        names = _top_level_names(starter.get(f, ""))
+        module = f[:-3].replace("/", ".") if f.endswith(".py") else f
+        for m in re.finditer(r"from\s+" + re.escape(module) + r"\s+import\s+([\w, ]+)", tests):
+            names |= {n.strip() for n in m.group(1).split(",") if n.strip()}
+        expected[f] = names
+    result: dict[str, str] = {}
+    for body in blocks:
+        names = _top_level_names(body)
+        scores = sorted(((len(names & want), f) for f, want in expected.items() if f not in result), reverse=True)
+        if not scores or scores[0][0] == 0 or (len(scores) > 1 and scores[0][0] == scores[1][0]):
+            return {}
+        result[scores[0][1]] = body
+    return result
 
 
 def parse_files(reply: str, task: Task) -> tuple[dict[str, str], list[str]]:
     """Returns ({path: content}, problems). Paths into tests/ or outside the project are refused."""
     files: dict[str, str] = {}
     problems: list[str] = []
-    for path, body in _FILE_BLOCK.findall(reply):
+    unnamed: list[tuple[str, str]] = []
+    known = set(task.files) | set(task.starter_files())
+    for m in _FENCE.finditer(reply):
+        info, body = m.group(2).strip(), m.group(3)
+        lang = info.split()[0].split(":")[0].lower() if info else ""
+        path = None
+        im = _INFO_PATH.search(info) if info else None
+        if im:
+            path = im.group(1)
+        elif "." in lang and re.fullmatch(_PATH, lang):        # ```todo/store.py
+            path, lang = lang, lang.rsplit(".", 1)[-1]
+        if not path:
+            path = _path_before(reply, m.start(), known)
+        if not path:
+            first = body.split("\n", 1)[0]
+            cm = _COMMENT_PATH.match(first)
+            if cm:
+                path = cm.group(1)
+        if not path:
+            unnamed.append((lang, body))
+            continue
         path = path.strip().removeprefix("./")
         reason = unsafe_path_reason(path)
         if reason:
             problems.append(f"{path}: {reason}")
             continue
         files[path] = body
-    if not files and not problems and len(task.files) == 1:
-        # no FILE markers: accept a single code block as the one expected file
-        blocks = [(lang.strip().lower(), body) for lang, body in _ANY_BLOCK.findall(reply)]
-        python = [b for lang, b in blocks if lang in ("python", "py", "")]
-        if python:
-            files[task.files[0]] = max(python, key=len)
+
+    code = [body for lang, body in unnamed if lang in _CODE_LANGS]
+    if not files and len(task.files) == 1 and code:
+        # no file names at all: accept the longest code block as the one expected file
+        files[task.files[0]] = max(code, key=len)
+    elif not files and code:
+        files.update(_match_unnamed(code, task))
     if not files and not problems:
-        problems.append("no files found in your answer")
+        if unnamed:
+            problems.append(f"found {len(unnamed)} code block(s) but no file names - put "
+                            "'FILE: path/to/file.py' on the line above each block")
+        else:
+            problems.append("no files found in your answer")
     return files, problems
