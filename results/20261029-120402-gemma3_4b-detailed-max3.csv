@@ -1,0 +1,7 @@
+task,level,status,attempts,seconds,model,feedback,max_attempts
+rle,tricky,failed,3,29.7,gemma3:4b,detailed,3
+duration,tricky,failed,3,48.6,gemma3:4b,detailed,3
+spiral,tricky,failed,3,45.6,gemma3:4b,detailed,3
+version,tricky,failed,3,33.2,gemma3:4b,detailed,3
+wrap,tricky,failed,3,21.4,gemma3:4b,detailed,3
+weekday,tricky,failed,3,30.4,gemma3:4b,detailed,3

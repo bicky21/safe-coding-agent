@@ -1,0 +1,7 @@
+task,level,status,attempts,seconds
+rle,tricky,failed,3,26.0
+duration,tricky,failed,3,42.8
+spiral,tricky,passed,3,45.0
+version,tricky,failed,3,30.2
+wrap,tricky,failed,3,21.3
+weekday,tricky,failed,3,34.7

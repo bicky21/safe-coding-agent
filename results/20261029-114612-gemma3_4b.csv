@@ -1,0 +1,8 @@
+task,level,status,attempts,seconds
+palindrome,easy,passed,1,9.2
+roman,easy,passed,1,8.0
+brackets,medium,passed,1,5.4
+lcs,medium,passed,1,7.6
+intervals,medium,passed,1,7.2
+dijkstra,hard,passed,1,12.2
+lru,hard,passed,1,10.7
