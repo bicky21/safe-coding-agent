@@ -1,0 +1,41 @@
+{
+  "version": "1.0.0",
+  "created": "2026-10-29 16:41:44",
+  "settings": {
+    "model": "openai:openai/gpt-oss-20b",
+    "max_attempts": 3,
+    "feedback": "detailed",
+    "anti_stuck": true,
+    "plan_first": false,
+    "safety": "task default"
+  },
+  "suite": "builtin",
+  "runner": "local",
+  "tasks": [
+    "brackets",
+    "dijkstra",
+    "duration",
+    "intervals",
+    "lcs",
+    "lru",
+    "palindrome",
+    "rle",
+    "roman",
+    "spiral",
+    "version",
+    "weekday",
+    "wrap"
+  ],
+  "runs": [
+    {
+      "tasks": 13,
+      "tasks_passed": 13,
+      "tests_total": 86,
+      "tests_first": 74,
+      "tests_best": 86,
+      "repeats": 0,
+      "blocked": 0,
+      "seconds": 128.6
+    }
+  ]
+}

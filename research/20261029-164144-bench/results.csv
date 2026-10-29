@@ -1,0 +1,14 @@
+run,task,level,status,attempts,repeats,blocked,first_passed,best_passed,total,seconds
+1,brackets,medium,passed,1,0,0,6,6,6,1.6
+1,dijkstra,hard,passed,1,0,0,4,4,4,1.5
+1,duration,tricky,passed,3,0,0,0,12,12,11.7
+1,intervals,medium,passed,1,0,0,5,5,5,35.7
+1,lcs,medium,passed,1,0,0,4,4,4,3.1
+1,lru,hard,passed,1,0,0,7,7,7,2.5
+1,palindrome,easy,passed,1,0,0,4,4,4,13.6
+1,rle,tricky,passed,1,0,0,8,8,8,2.9
+1,roman,easy,passed,1,0,0,5,5,5,1.6
+1,spiral,tricky,passed,1,0,0,5,5,5,17.2
+1,version,tricky,passed,1,0,0,9,9,9,1.5
+1,weekday,tricky,passed,1,0,0,10,10,10,1.9
+1,wrap,tricky,passed,1,0,0,7,7,7,33.8
