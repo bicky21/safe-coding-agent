@@ -437,6 +437,18 @@ if __name__ == "__main__":
     if not selected:
         sys.exit(f"No task matched. Use --list to see task names.")
 
+    # Check the model is downloaded, so we fail with a clear message instead of a long trace
+    try:
+        import ollama
+        ollama.show(MODEL)
+    except ImportError:
+        pass
+    except Exception as e:
+        if "not found" in str(e):
+            sys.exit(f"Model '{MODEL}' is not downloaded in Ollama.\n"
+                     f"Fix:  ollama pull {MODEL}      (see your models with: ollama list)")
+        sys.exit(f"Can't reach Ollama ({e}).\nFix:  make sure Ollama is running (ollama serve)")
+
     print(f"Model: {MODEL}   Max attempts: {MAX_ATTEMPTS}   Feedback: {FEEDBACK_MODE}   "
           f"Anti-stuck: {'on' if ANTI_STUCK else 'off'}   Plan-first: {'on' if PLAN_FIRST else 'off'}   "
           f"Tasks: {len(selected)}")
