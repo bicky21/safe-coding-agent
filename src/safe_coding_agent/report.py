@@ -52,8 +52,9 @@ def totals(results: list[TaskResult]) -> dict:
 
 
 def save(run_dir: Path, runs: list[list[TaskResult]], settings: dict, suite: str,
-         runner: str) -> None:
+         runner: str, interrupted: bool = False) -> None:
     summary = {
+        "interrupted": interrupted,
         "version": __version__, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "settings": settings, "suite": suite, "runner": runner,
         "tasks": sorted({r.task for rs in runs for r in rs}),
@@ -162,6 +163,8 @@ def compare(runs_dir: str | Path, task_filter: str | None = None) -> list[dict]:
             continue
         if task_filter and task_filter not in data.get("suite", "") and task_filter not in data.get("tasks", []):
             continue
+        if data.get("interrupted"):
+            continue                                  # incomplete: would make averages unfair
         s = data["settings"]
         key = (s["model"], data.get("suite", "?"), len(data.get("tasks", [])), method_label(s))
         runs = [dict(r) for r in data["runs"]]

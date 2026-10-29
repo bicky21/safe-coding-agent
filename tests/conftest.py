@@ -43,7 +43,13 @@ class ScriptedModel(BaseChatModel):
         text = SCRIPT.next_reply(prompt, self.temperature)
         if text.startswith("RAISE:"):            # scripted provider error, e.g. "RAISE:401 invalid key"
             raise RuntimeError(text[len("RAISE:"):])
-        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=text))])
+        if text == "CTRL-C":                     # the user pressing Ctrl+C during a model call
+            raise KeyboardInterrupt
+        meta = {}
+        if text.startswith("CUTOFF:"):           # a reply cut off at the maximum length
+            text, meta = text[len("CUTOFF:"):], {"finish_reason": "length"}
+        message = AIMessage(content=text, response_metadata=meta)
+        return ChatResult(generations=[ChatGeneration(message=message)])
 
 
 register_provider("scripted", lambda spec, temperature: ScriptedModel(temperature=temperature))

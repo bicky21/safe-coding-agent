@@ -134,3 +134,28 @@ def test_waits_as_long_as_the_provider_asks(monkeypatch):
 def test_too_large_is_detected():
     assert ModelError("Error code: 413 - Request too large for model").too_large
     assert not ModelError("Error code: 401 - Invalid API Key").too_large
+
+
+def test_max_tokens_that_fit():
+    e = ModelError("Error code: 413 - Request too large for model `x` on tokens per minute (TPM): "
+                   "Limit 8000, Requested 9500, please reduce your message size")
+    assert e.max_tokens_that_fit(8192) == 8192 - 1500 - 200
+    assert ModelError("413 request too large").max_tokens_that_fit(8192) is None
+
+
+def test_reasoning_effort_reaches_openai(monkeypatch):
+    from safe_coding_agent.models import make_model
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    m = make_model(parse_model("openai:openai/gpt-oss-20b", reasoning_effort="low"), 0.0)
+    assert m.reasoning_effort == "low"
+    assert make_model(parse_model("openai:gpt-4o-mini"), 0.0).reasoning_effort is None
+
+
+def test_was_cut_off():
+    from safe_coding_agent.models import was_cut_off
+    msg = type("M", (), {})
+    for meta, cut in [({"finish_reason": "length"}, True), ({"stop_reason": "max_tokens"}, True),
+                      ({"done_reason": "length"}, True), ({"finish_reason": "stop"}, False), ({}, False)]:
+        m = msg()
+        m.response_metadata = meta
+        assert was_cut_off(m) is cut

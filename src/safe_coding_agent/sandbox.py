@@ -187,6 +187,10 @@ class LocalRunner:
             proc = subprocess.Popen(cmd, **kwargs)
             try:
                 out, _ = proc.communicate(timeout=timeout)
+            except KeyboardInterrupt:             # Ctrl+C: don't leave the tests running
+                _kill_group(proc)
+                proc.wait()
+                raise
             except subprocess.TimeoutExpired:
                 _kill_group(proc)
                 out, _ = proc.communicate()

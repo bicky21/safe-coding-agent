@@ -142,3 +142,18 @@ def test_compare_recomputes_first_try_from_attempts(tmp_path, capsys):
             f.write(_json.dumps({"run": 1, "task": "duration", "status": status, "passed": passed}) + "\n")
     assert main(["compare", "--runs-dir", str(tmp_path / "runs")]) == 0
     assert "11.0/12" in capsys.readouterr().out
+
+
+def test_ctrl_c_keeps_finished_tasks(script, tmp_path, capsys):
+    ok = reply({"solution.py": "def is_palindrome(s):\n    t = [c.lower() for c in s if c.isalnum()]\n"
+                               "    return t == t[::-1]\n"})
+    script.replies = [ok, "CTRL-C"]
+    runs = tmp_path / "runs"
+    code = main(["bench", "--task", "palindrome", "--task", "roman", *COMMON, "--runs-dir", str(runs)])
+    assert code == 130
+    [run_dir] = list(runs.iterdir())
+    assert run_dir.name.endswith("-stopped")
+    rows = list(csv.DictReader(open(run_dir / "results.csv")))
+    assert [(r["task"], r["status"]) for r in rows] == [("palindrome", "passed")]
+    capsys.readouterr()
+    assert main(["compare", "--runs-dir", str(runs)]) == 1          # stopped runs are left out

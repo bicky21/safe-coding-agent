@@ -44,7 +44,11 @@ def add_agent_options(p: argparse.ArgumentParser) -> None:
                         "anthropic:claude-sonnet-5-5 (env SCA_MODEL; default %(default)s)")
     g.add_argument("--base-url", help="API base URL (OpenAI-compatible servers, remote Ollama)")
     g.add_argument("--api-key-env", help="name of the env variable holding the API key")
-    g.add_argument("--max-tokens", type=int, default=8192, help="max tokens per model reply")
+    g.add_argument("--max-tokens", type=int, default=8192,
+                   help="max tokens per model reply (lowered automatically if the provider's limit is smaller)")
+    g.add_argument("--reasoning-effort", choices=["low", "medium", "high"],
+                   help="for reasoning models on OpenAI-compatible APIs (e.g. gpt-oss): think less to leave "
+                        "room for the code")
     g = p.add_argument_group("agent")
     g.add_argument("--max-attempts", type=int, default=3,
                    help="real tries per task (1 = no self-checking); unusable answers and repeats don't count")
@@ -69,7 +73,7 @@ def add_agent_options(p: argparse.ArgumentParser) -> None:
 
 
 def make_settings(a) -> Settings:
-    spec = parse_model(a.model, a.base_url, a.api_key_env, a.max_tokens)
+    spec = parse_model(a.model, a.base_url, a.api_key_env, a.max_tokens, a.reasoning_effort)
     if a.max_attempts < 1:
         raise SystemExit("--max-attempts must be at least 1")
     return Settings(model=spec, max_attempts=a.max_attempts, feedback=a.feedback,
@@ -149,17 +153,43 @@ def cmd_bench(a) -> int:
     out(f"Suite: {suite_label} ({len(tasks)} tasks)   Model: {settings.model.label}   Runner: {runner.name}   "
         f"Runs: {a.runs}   Jobs: {a.jobs}" + ("   Plan-first" if settings.plan_first else ""))
     runs: list[list[TaskResult]] = []
-    for k in range(1, a.runs + 1):
-        if a.runs > 1:
-            out(f"\n===== run {k} of {a.runs} =====")
-        prefix = f"[run {k}] " if a.runs > 1 else ""
-        if a.jobs > 1:
-            with ThreadPoolExecutor(max_workers=a.jobs) as pool:
-                results = list(pool.map(lambda t, p=prefix: solve(t, settings, runner, a.quiet, p), tasks))
-        else:
-            results = [solve(t, settings, runner, a.quiet, prefix) for t in tasks]
-        print_table(results)
-        runs.append(results)
+    current: list[TaskResult] = []
+    try:
+        for k in range(1, a.runs + 1):
+            if a.runs > 1:
+                out(f"\n===== run {k} of {a.runs} =====")
+            prefix = f"[run {k}] " if a.runs > 1 else ""
+            current = []
+            if a.jobs > 1:
+                with ThreadPoolExecutor(max_workers=a.jobs) as pool:
+                    futures = [pool.submit(solve, t, settings, runner, a.quiet, prefix) for t in tasks]
+                    try:
+                        for f in futures:
+                            current.append(f.result())
+                    except KeyboardInterrupt:
+                        for f in futures:
+                            f.cancel()
+                        current = [f.result() for f in futures if f.done() and not f.cancelled()
+                                   and f.exception() is None]
+                        raise
+            else:
+                for t in tasks:
+                    current.append(solve(t, settings, runner, a.quiet, prefix))
+            print_table(current)
+            runs.append(current)
+            current = []
+    except KeyboardInterrupt:
+        done = runs + ([current] if current else [])
+        if not done:
+            out("\nstopped before any task finished; nothing to save")
+            return 130
+        out(f"\nstopped: saving the {sum(len(r) for r in done)} task(s) that finished")
+        if current:
+            print_table(current)
+        run_dir = report.new_run_dir(a.runs_dir, "bench" + (f"-{a.level}" if a.level else "") + "-stopped")
+        report.save(run_dir, done, settings.describe(), suite=suite_label, runner=runner.name, interrupted=True)
+        out(f"Saved: {run_dir}   (marked as stopped: sca compare leaves it out)")
+        return 130
     if a.runs > 1:
         out("\nAll runs:")
         for k, rs in enumerate(runs, 1):

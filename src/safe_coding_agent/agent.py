@@ -103,6 +103,8 @@ class CodingAgent:
         self.task, self.s, self.runner = task, settings, runner
         self.say = on_event or (lambda msg: None)
         self._warned_ctx = False
+        self._cut_off = False          # was the last reply cut off at the maximum length?
+        self._answer_limit = settings.model.max_tokens
         self.graph = self._build()
 
     # ------------------------------------------------------------ helpers
@@ -117,14 +119,20 @@ class CodingAgent:
             spec = replace(spec, num_ctx=num_ctx)
         while True:
             model = make_model(spec, self.s.temperature(attempt))
+            info: dict = {}
             try:
-                return invoke_with_retry(model, [SystemMessage(system), HumanMessage(prompt)])
+                text = invoke_with_retry(model, [SystemMessage(system), HumanMessage(prompt)], info=info)
+                self._cut_off = info.get("cut_off", False)
+                self._answer_limit = spec.max_tokens
+                return text
             except ModelError as e:
                 # free tiers count prompt + the reserved answer length against a small limit
                 # (e.g. Groq: 8000 tokens per minute): ask for a shorter answer and try again
                 if not e.too_large or spec.max_tokens <= 1024:
                     raise
-                spec = replace(spec, max_tokens=spec.max_tokens // 2)
+                fit = e.max_tokens_that_fit(spec.max_tokens)
+                new = fit if fit and 1024 <= fit < spec.max_tokens else spec.max_tokens // 2
+                spec = replace(spec, max_tokens=max(new, 1024))
                 self.say(f"request too large for the provider; retrying with max answer length "
                          f"{spec.max_tokens} tokens")
 
@@ -175,9 +183,15 @@ class CodingAgent:
         except ModelError as e:
             return self._model_failed(state, e)
         files, problems = prompts.parse_files(reply, self.task)
+        if self._cut_off and (problems and not files):
+            problems = [f"it was cut off at the maximum length ({self._answer_limit} tokens) before the code "
+                        "was complete"]
         if problems and not files:
             fb = ("Your answer could not be used: " + "; ".join(problems) + ".\n\n" + prompts.OUTPUT_FORMAT)
-            self.say(f"attempt {n}: invalid answer ({'; '.join(problems)[:80]}) - not counted, retrying")
+            if self._cut_off:
+                fb += ("\n\nYour answer was too long. Keep it SHORT: think briefly, write no explanations "
+                       "or comments, and return only the FILE blocks.")
+            self.say(f"attempt {n}: invalid answer ({'; '.join(problems)[:90]}) - not counted, retrying")
             return {"new_files": {}, "reply": reply,
                     **self._record({**state, "new_files": {}, "reply": reply}, "invalid", fb)}
         if problems:

@@ -248,3 +248,12 @@ def test_first_try_is_the_first_checked_answer(make_task, script, model_spec):
     r = run(make_task(ADD_TESTS), model_spec)
     assert [a.status for a in r.attempts] == ["invalid", "failed", "passed"]
     assert (r.first_passed, r.best_passed) == (1, 3)     # not 0: the unusable answer isn't a test result
+
+
+def test_cut_off_answer_gets_a_clear_message(make_task, script, model_spec):
+    script.replies = ["CUTOFF:FILE: solution.py\n```python\ndef add(a, b):\n    # a long explanation that",
+                      reply(GOOD)]
+    r = run(make_task(ADD_TESTS), model_spec)
+    assert [a.status for a in r.attempts] == ["invalid", "passed"]
+    assert "cut off at the maximum length" in r.attempts[0].feedback
+    assert "Keep it SHORT" in script.calls[1]["prompt"]

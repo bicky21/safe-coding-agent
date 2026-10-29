@@ -66,6 +66,11 @@ sca run my-task --model openai:openai/gpt-oss-120b \
 sca run my-task --model openai:local-model --base-url http://localhost:1234/v1   # LM Studio
 ```
 
+**Reasoning models** (e.g. `gpt-oss`) think before answering, and that thinking counts toward
+`--max-tokens`. On long tasks the code can get cut off; add `--reasoning-effort low` so they
+think less. Free tiers also have small per-minute token limits (Groq: 8000); the agent lowers
+the answer length automatically when a request is too large, and waits when rate-limited.
+
 Set a default with `export SCA_MODEL=anthropic:claude-sonnet-5-5`. Remote Ollama:
 `--base-url http://host:11434` (or `OLLAMA_HOST`).
 
@@ -188,6 +193,10 @@ Each result reports tests passed on the **first try** (= without self-checking) 
 | `--no-anti-stuck` | turn off the anti-stuck help: by default a repeated answer makes the model start over from the original code, a change that fixes nothing is called out, temperature rises on retries, and the run stops early when the model keeps repeating itself |
 | `--safety` | override every task's safety level |
 | `--runs N` / `--jobs N` | repeat N times / run N tasks in parallel |
+| `--reasoning-effort low` | reasoning models (OpenAI-compatible APIs): think less, leave room for the code |
+
+Pressing **Ctrl+C** during `sca bench` saves the tasks that already finished (in a folder ending
+in `-stopped`, which `sca compare` leaves out because it is incomplete).
 
 ## Research findings
 

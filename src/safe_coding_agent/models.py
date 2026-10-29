@@ -31,6 +31,14 @@ class ModelError(RuntimeError):
         return ("413" in text or "request too large" in text or "context_length_exceeded" in text
                 or "maximum context length" in text or "max_tokens" in text and "too" in text)
 
+    def max_tokens_that_fit(self, current: int) -> int | None:
+        """From 'Limit 8000, Requested 8579': the largest answer length that would have fit."""
+        m = re.search(r"limit\D{0,20}(\d+)\D{1,30}requested\D{0,20}(\d+)", str(self), re.IGNORECASE)
+        if not m:
+            return None
+        limit, requested = int(m.group(1)), int(m.group(2))
+        return current - (requested - limit) - 200          # 200 tokens of safety margin
+
 
 @dataclass(frozen=True)
 class ModelSpec:
@@ -40,6 +48,7 @@ class ModelSpec:
     api_key_env: str | None = None
     max_tokens: int = 8192
     num_ctx: int | None = None        # Ollama context window for this call (see context_for)
+    reasoning_effort: str | None = None   # low | medium | high, for reasoning models (OpenAI-compatible)
 
     @property
     def label(self) -> str:
@@ -47,7 +56,7 @@ class ModelSpec:
 
 
 def parse_model(spec: str, base_url: str | None = None, api_key_env: str | None = None,
-                max_tokens: int = 8192) -> ModelSpec:
+                max_tokens: int = 8192, reasoning_effort: str | None = None) -> ModelSpec:
     if ":" not in spec:
         raise ModelError(f"model must look like 'provider:name' (e.g. ollama:gemma3:4b), not {spec!r}")
     provider, name = spec.split(":", 1)
@@ -56,7 +65,8 @@ def parse_model(spec: str, base_url: str | None = None, api_key_env: str | None 
         raise ModelError(f"unknown provider {provider!r}; choose one of: {', '.join(sorted(_PROVIDERS))}")
     if not name.strip():
         raise ModelError(f"no model name after '{provider}:'")
-    return ModelSpec(provider, name.strip(), base_url, api_key_env, max_tokens)
+    return ModelSpec(provider, name.strip(), base_url, api_key_env, max_tokens,
+                     reasoning_effort=reasoning_effort)
 
 
 def _need(package: str, extra: str):
@@ -109,6 +119,8 @@ def _openai(spec: ModelSpec, temperature: float) -> BaseChatModel:
     base_url = spec.base_url or os.environ.get("OPENAI_BASE_URL")
     if base_url:
         kwargs["base_url"] = base_url
+    if spec.reasoning_effort:
+        kwargs["reasoning_effort"] = spec.reasoning_effort
     return ChatOpenAI(**kwargs)
 
 
@@ -215,13 +227,24 @@ def retry_after(text: str) -> float | None:
     return minutes * 60 + seconds
 
 
+def was_cut_off(message) -> bool:
+    """True when the reply stopped because it hit the maximum answer length."""
+    meta = getattr(message, "response_metadata", None) or {}
+    reason = str(meta.get("finish_reason") or meta.get("stop_reason") or meta.get("done_reason") or "")
+    return reason.lower() in ("length", "max_tokens")
+
+
 def invoke_with_retry(model: BaseChatModel, messages, retries: int = 4, base_delay: float = 2.0,
-                      max_wait: float = 90.0) -> str:
+                      max_wait: float = 90.0, info: dict | None = None) -> str:
     """Call the model; retry temporary failures (rate limits, overload, network) with backoff,
-    waiting as long as the provider asks for when it says so."""
+    waiting as long as the provider asks for when it says so. If `info` is given, info["cut_off"]
+    tells whether the reply was cut off at the maximum length."""
     for attempt in range(retries + 1):
         try:
-            return message_text(model.invoke(messages))
+            message = model.invoke(messages)
+            if info is not None:
+                info["cut_off"] = was_cut_off(message)
+            return message_text(message)
         except Exception as e:  # noqa: BLE001 - providers raise many error types
             text = f"{type(e).__name__}: {e}".lower()
             if attempt == retries or not any(k in text for k in _RETRYABLE):
