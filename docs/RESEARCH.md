@@ -82,7 +82,8 @@ Gemma ran locally on a laptop (HP Victus, Ryzen 5 5600H, RX 6500M).
 | gemma3:4b | laptop | todo-project | yes | 11/13 | 11/13 | 1.5 min |
 | gemma3:4b | laptop | todo-project | yes + plan-first | 9/13 | 9/13 | 12.9 min |
 | gpt-oss-20b | Groq | 13 built-in | no | 86/86 | 86/86 | 1.1 min |
-| gpt-oss-20b | Groq | 13 built-in | yes | weekday 7/10, fixed on try 2 | (run stopped, see below) | |
+| gpt-oss-20b | Groq | 13 built-in | yes | 85/86 | **86/86** | 2.1 min |
+| gpt-oss-20b | Groq | 13 built-in | yes (earlier run, stopped by a 413 error) | weekday 7/10 | weekday 10/10 | |
 | qwen3.8-27b | Groq | 13 built-in | no | 86/86 | 86/86 | 2.8 min |
 | qwen3.8-27b | Groq | 13 built-in | yes | 86/86 | 86/86 | 3.7 min |
 | gpt-oss-120b | Groq | todo-project | yes | 13/13 | 13/13 | 4 s |
@@ -101,10 +102,13 @@ Gemma ran locally on a laptop (HP Victus, Ryzen 5 5600H, RX 6500M).
     defeat recall from memory (gemma3:4b reached about 16 of 43 on them). Self-checking had
     nothing left to fix. To measure self-checking on bigger models, the tasks have to be
     much harder (larger multi-file projects, stricter specs).
-12. **Self-checking still caught a real mistake on a 20B model.** In the self-checking run,
-    gpt-oss-20b failed 3 of 10 weekday tests on its first try and fixed them on the second.
-    In the run without self-checking the same model passed weekday first time, so a single
-    run hides this kind of variation; repeated runs (`--runs`) are needed for firm numbers.
+12. **Self-checking still caught real mistakes on a 20B model.** In two self-checking runs,
+    gpt-oss-20b failed a task on its first tested answer and fixed it itself: weekday (7/10,
+    then 10/10) in one run, duration (11/12, then 12/12, after one unusable answer) in the
+    other. In the run without self-checking the same model happened to pass everything, so a
+    single run hides this variation; repeated runs (`--runs`) are needed for firm numbers.
+    gpt-oss-20b also sometimes returned no usable code at all (2 times in 26 tasks); the
+    agent retries those for free.
 13. **Plan-first did not help gemma3:4b on the multi-file task** (9/13 vs 11/13) and took
     about 8x longer. Gemma wrote a new plan each time but kept returning its previous code,
     which led to the "fresh start after a repeat" and "stop early" changes.
@@ -126,6 +130,9 @@ Testing with real models found problems the scripted tests did not:
   and waits as long as the provider asks on rate limits.
 - One model error crashed a whole benchmark and lost all its results; it now marks that
   task as `error`, carries on, and saves everything.
+- "First try" counted an unusable answer as 0 passed tests, although unusable answers are
+  free retries in every mode. It now means the first answer that was actually tested, and
+  `sca compare` recomputes it for older saved runs.
 
 ### Next
 

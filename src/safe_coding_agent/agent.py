@@ -323,7 +323,10 @@ class TaskResult:
             status = attempts[-1].status
         else:
             status = "failed"
-        first = attempts[0].passed if attempts else 0
+        # "first try" = the first answer that was actually checked (tested, or blocked = 0).
+        # Unusable answers and repeats are free retries in every mode, so they don't count.
+        checked = [a for a in attempts if a.status in REAL]
+        first = checked[0].passed if checked else 0
         return cls(task.name, task.level, status, attempts, round(seconds, 1), first,
                    best.passed if best else 0, total, dict(best.tested_files) if best else {})
 

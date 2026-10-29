@@ -126,3 +126,19 @@ def test_bench_survives_a_model_error_and_saves_results(script, tmp_path, capsys
     [run_dir] = list(Path(runs).iterdir())
     rows = {r["task"]: r["status"] for r in csv.DictReader(open(run_dir / "results.csv"))}
     assert rows == {"palindrome": "passed", "roman": "error"}
+
+
+def test_compare_recomputes_first_try_from_attempts(tmp_path, capsys):
+    import json as _json
+    run = tmp_path / "runs" / "r1"
+    run.mkdir(parents=True)
+    _json.dump({"settings": {"model": "m:x", "max_attempts": 3, "feedback": "detailed", "anti_stuck": True,
+                             "plan_first": False, "safety": "task default"},
+                "suite": "builtin", "tasks": ["duration"],
+                "runs": [{"tasks_passed": 1, "tests_first": 0, "tests_best": 12, "tests_total": 12, "seconds": 9}]},
+               open(run / "summary.json", "w"))
+    with open(run / "attempts.jsonl", "w") as f:            # old rule counted the invalid answer as 0
+        for status, passed in [("invalid", 0), ("failed", 11), ("passed", 12)]:
+            f.write(_json.dumps({"run": 1, "task": "duration", "status": status, "passed": passed}) + "\n")
+    assert main(["compare", "--runs-dir", str(tmp_path / "runs")]) == 0
+    assert "11.0/12" in capsys.readouterr().out

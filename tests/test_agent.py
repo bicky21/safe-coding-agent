@@ -241,3 +241,10 @@ def test_too_large_request_retries_with_shorter_answer(make_task, script):
     script.replies = [reply(GOOD)]
     r = run(make_task(ADD_TESTS), parse_model("tiny-tier:m", max_tokens=8192))
     assert r.status == "passed" and seen == [8192, 4096]
+
+
+def test_first_try_is_the_first_checked_answer(make_task, script, model_spec):
+    script.replies = ["sorry, no code", reply(BAD), reply(GOOD)]
+    r = run(make_task(ADD_TESTS), model_spec)
+    assert [a.status for a in r.attempts] == ["invalid", "failed", "passed"]
+    assert (r.first_passed, r.best_passed) == (1, 3)     # not 0: the unusable answer isn't a test result

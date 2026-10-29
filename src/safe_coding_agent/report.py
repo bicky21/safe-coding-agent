@@ -130,6 +130,28 @@ def method_label(s: dict) -> str:
     return ", ".join(parts)
 
 
+CHECKED = ("passed", "failed", "blocked")
+
+
+def _first_checked(attempts_file: Path) -> dict[int, int]:
+    """Per run: tests passed by each task's first CHECKED answer (unusable answers and repeats
+    are free retries, so they don't count as the first try). {} if there is no attempts file."""
+    if not attempts_file.is_file():
+        return {}
+    firsts: dict[tuple[int, str], int] = {}
+    try:
+        for line in attempts_file.read_text(encoding="utf-8").splitlines():
+            a = json.loads(line)
+            if a.get("status") in CHECKED and (a["run"], a["task"]) not in firsts:
+                firsts[(a["run"], a["task"])] = int(a.get("passed", 0))
+    except (OSError, json.JSONDecodeError, KeyError):
+        return {}
+    out: dict[int, int] = defaultdict(int)
+    for (run, _task), passed in firsts.items():
+        out[run] += passed
+    return dict(out)
+
+
 def compare(runs_dir: str | Path, task_filter: str | None = None) -> list[dict]:
     """Group every saved run by model + method + task set; average the scores."""
     groups: dict[tuple, list[dict]] = defaultdict(list)
@@ -142,7 +164,11 @@ def compare(runs_dir: str | Path, task_filter: str | None = None) -> list[dict]:
             continue
         s = data["settings"]
         key = (s["model"], data.get("suite", "?"), len(data.get("tasks", [])), method_label(s))
-        groups[key].extend(data["runs"])
+        runs = [dict(r) for r in data["runs"]]
+        for k, first in _first_checked(summary_file.parent / "attempts.jsonl").items():
+            if k <= len(runs):
+                runs[k - 1]["tests_first"] = first    # recomputed, so older runs use the same rule
+        groups[key].extend(runs)
     rows = []
     for (model, suite, n_tasks, method), runs in sorted(groups.items()):
         bests = [r["tests_best"] for r in runs]
