@@ -1,11 +1,12 @@
 """
-Self-Checking, Safe Coding Agent (v0.1.2)
+Self-Checking, Safe Coding Agent (v0.2)
 
 Usage:
   python agent.py                     # run all tasks in tasks.py
   python agent.py --task roman        # run one task
   python agent.py --level hard        # run only hard tasks
   python agent.py --max-attempts 1    # self-checking OFF (for comparison)
+  python agent.py --feedback simple   # raw Python errors only (for comparison)
   python agent.py --list              # show task names
 
 What it does:
@@ -44,6 +45,7 @@ from langgraph.graph import END, START, StateGraph
 MODEL = os.environ.get("AGENT_MODEL", "gemma3:4b")
 MAX_ATTEMPTS = 3
 TEST_TIMEOUT_SECONDS = 10
+FEEDBACK_MODE = "detailed"   # "detailed" (which test, got vs expected) or "simple" (raw error)
 
 # Very simple safety rules (v0.1). You will improve these later.
 BLOCKED_PATTERNS = {
@@ -69,6 +71,7 @@ class AgentState(TypedDict):
     feedback: str   # error message or safety reason from the last step
     attempts: int   # how many times the LLM has written code
     status: str     # "running" | "passed" | "blocked"
+    history: list   # (code, result) for every attempt - saved to the log file
 
 
 # ---------------- Helpers ----------------
@@ -105,19 +108,96 @@ def check_safety(state: AgentState) -> dict:
     for pattern, reason in BLOCKED_PATTERNS.items():
         if re.search(pattern, state["code"]):
             print(f"BLOCKED: code tried {reason}")
-            return {"status": "blocked", "feedback": f"Blocked: {reason} ({pattern})"}
+            fb = f"Blocked: {reason} ({pattern})"
+            return {"status": "blocked", "feedback": fb,
+                    "history": state["history"] + [(state["code"], fb)]}
     print("Safety check passed")
     return {"status": "running"}
 
 
+# Test runner used in "detailed" feedback mode.
+# It rewrites every `assert a == b` / `assert a is b` in the tests so that, when
+# one fails, the error says WHICH test failed, what the code returned, and what
+# was expected - instead of a bare "AssertionError".
+HARNESS = r'''
+import ast, sys, traceback
+
+def _trace():
+    """Error trace without this runner's own lines (they would only confuse the model)."""
+    etype, e, tb = sys.exc_info()
+    frames = [f for f in traceback.extract_tb(tb) if not f.filename.endswith("harness.py")]
+    return "".join(traceback.format_list(frames[-3:]) + traceback.format_exception_only(etype, e))
+
+def _check(got, expected, op, src):
+    ok = (got is expected) if op == "is" else (got == expected)
+    if not ok:
+        raise AssertionError(
+            f"Test failed: {src}\n  your code returned: {got!r}\n  expected:           {expected!r}")
+
+class _Rewrite(ast.NodeTransformer):
+    def visit_Assert(self, node):
+        t = node.test
+        if isinstance(t, ast.Compare) and len(t.ops) == 1 and isinstance(t.ops[0], (ast.Eq, ast.Is)):
+            op = "is" if isinstance(t.ops[0], ast.Is) else "=="
+            call = ast.Call(ast.Name("_check", ast.Load()),
+                            [t.left, t.comparators[0], ast.Constant(op), ast.Constant(ast.unparse(node))], [])
+            return ast.copy_location(ast.Expr(call), node)
+        return node
+
+code = open("solution.py", encoding="utf-8").read()
+tests = open("tests.py", encoding="utf-8").read()
+ns = {"_check": _check}
+try:
+    exec(compile(code, "solution.py", "exec"), ns)
+except Exception:
+    print("Your code crashed before the tests ran:\n" + _trace(), file=sys.stderr)
+    sys.exit(1)
+
+tree = ast.fix_missing_locations(_Rewrite().visit(ast.parse(tests)))
+try:
+    exec(compile(tree, "tests.py", "exec"), ns)
+except AssertionError as e:
+    if str(e).startswith("Test failed"):
+        print(e, file=sys.stderr)
+    else:
+        line = traceback.extract_tb(e.__traceback__)[-1]
+        print(f"Test failed at tests.py line {line.lineno}: {line.line}\n{e}", file=sys.stderr)
+    sys.exit(1)
+except Exception:
+    test_lines = [f for f in traceback.extract_tb(sys.exc_info()[2]) if f.filename == "tests.py"]
+    where = ""
+    if test_lines:
+        line = test_lines[-1].line
+        where = f"while running test: {line}\n"
+        # show the values of loop variables used on that line, e.g. args = (2026, 2, 0, 5)
+        try:
+            names = {n.id for n in ast.walk(ast.parse(line.strip())) if isinstance(n, ast.Name)}
+        except SyntaxError:
+            names = set()
+        for n in sorted(names):
+            v = ns.get(n)
+            if isinstance(v, (int, float, str, tuple, list, dict)):
+                where += f"  where {n} = {v!r}\n"
+    print(f"Your code raised an error {where}" + _trace(), file=sys.stderr)
+    sys.exit(1)
+'''
+
+
 def run_tests(state: AgentState) -> dict:
     with tempfile.TemporaryDirectory() as folder:
-        path = os.path.join(folder, "solution.py")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(state["code"] + "\n\n# ---- tests ----\n" + state["tests"] + "\n")
+        if FEEDBACK_MODE == "detailed":
+            for name, text in [("solution.py", state["code"]), ("tests.py", state["tests"]),
+                               ("harness.py", HARNESS)]:
+                with open(os.path.join(folder, name), "w", encoding="utf-8") as f:
+                    f.write(text + "\n")
+            script = "harness.py"
+        else:  # "simple": code + tests in one file, raw Python error
+            with open(os.path.join(folder, "solution.py"), "w", encoding="utf-8") as f:
+                f.write(state["code"] + "\n\n# ---- tests ----\n" + state["tests"] + "\n")
+            script = "solution.py"
         try:
             result = subprocess.run(
-                [sys.executable, path],
+                [sys.executable, script],
                 capture_output=True,
                 text=True,
                 timeout=TEST_TIMEOUT_SECONDS,
@@ -125,14 +205,17 @@ def run_tests(state: AgentState) -> dict:
             )
         except subprocess.TimeoutExpired:
             print("Tests timed out")
-            return {"feedback": f"Timed out after {TEST_TIMEOUT_SECONDS}s (infinite loop?)"}
+            fb = f"Timed out after {TEST_TIMEOUT_SECONDS}s (infinite loop?)"
+            return {"feedback": fb, "history": state["history"] + [(state["code"], fb)]}
 
     if result.returncode == 0:
         print("All tests passed")
-        return {"status": "passed", "feedback": ""}
+        return {"status": "passed", "feedback": "",
+                "history": state["history"] + [(state["code"], "PASSED")]}
 
     print("Tests failed")
-    return {"feedback": (result.stderr or result.stdout)[-2000:]}
+    fb = (result.stderr or result.stdout)[-2000:]
+    return {"feedback": fb, "history": state["history"] + [(state["code"], fb)]}
 
 
 # ---------------- Routing (which step comes next) ----------------
@@ -167,7 +250,7 @@ def run_task(agent, item: dict) -> dict:
     start = time.time()
     final = agent.invoke(
         {"task": item["task"], "tests": item["tests"], "code": "", "feedback": "",
-         "attempts": 0, "status": "running"},
+         "attempts": 0, "status": "running", "history": []},
         {"recursion_limit": 50},
     )
     status = final["status"] if final["status"] != "running" else "failed"
@@ -178,6 +261,7 @@ def run_task(agent, item: dict) -> dict:
         "attempts": final["attempts"],
         "seconds": round(time.time() - start, 1),
         "code": final["code"],
+        "history": final["history"],
     }
 
 
@@ -195,15 +279,24 @@ def print_summary(rows: list[dict]) -> None:
 
 
 def save_results(rows: list[dict]) -> str:
-    """Save results to results/<time>.csv so you can compare runs later."""
+    """Save a CSV summary and a full log (every attempt's code + error) in results/."""
     os.makedirs("results", exist_ok=True)
-    path = os.path.join("results", time.strftime("%Y%m%d-%H%M%S") + f"-{MODEL.replace(':', '_')}.csv")
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["task", "level", "status", "attempts", "seconds"])
+    base = os.path.join("results", time.strftime("%Y%m%d-%H%M%S")
+                        + f"-{MODEL.replace(':', '_')}-{FEEDBACK_MODE}-max{MAX_ATTEMPTS}")
+    fields = ["task", "level", "status", "attempts", "seconds", "model", "feedback", "max_attempts"]
+    with open(base + ".csv", "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for r in rows:
-            writer.writerow({k: r[k] for k in writer.fieldnames})
-    return path
+            writer.writerow({**{k: r[k] for k in fields[:5]}, "model": MODEL,
+                             "feedback": FEEDBACK_MODE, "max_attempts": MAX_ATTEMPTS})
+    with open(base + ".log.md", "w", encoding="utf-8") as f:
+        f.write(f"# Run log\n\nModel: {MODEL} | feedback: {FEEDBACK_MODE} | max attempts: {MAX_ATTEMPTS}\n")
+        for r in rows:
+            f.write(f"\n## {r['task']} ({r['level']}): {r['status']}\n")
+            for i, (code, result) in enumerate(r["history"], 1):
+                f.write(f"\n### Attempt {i}\n\n```python\n{code}\n```\n\nResult:\n\n```\n{result}\n```\n")
+    return base + ".csv"
 
 
 if __name__ == "__main__":
@@ -214,6 +307,8 @@ if __name__ == "__main__":
     parser.add_argument("--level", choices=["easy", "medium", "hard", "tricky"], help="run only this level")
     parser.add_argument("--max-attempts", type=int, default=MAX_ATTEMPTS,
                         help="tries per task (use 1 to switch self-checking off)")
+    parser.add_argument("--feedback", choices=["detailed", "simple"], default=FEEDBACK_MODE,
+                        help="detailed = which test failed + got vs expected; simple = raw error")
     parser.add_argument("--show-code", action="store_true", help="print the final code of each task")
     parser.add_argument("--list", action="store_true", help="list task names and exit")
     args = parser.parse_args()
@@ -224,13 +319,15 @@ if __name__ == "__main__":
         sys.exit(0)
 
     MAX_ATTEMPTS = args.max_attempts
+    FEEDBACK_MODE = args.feedback
     selected = [t for t in TASKS
                 if (not args.task or t["name"] == args.task)
                 and (not args.level or t["level"] == args.level)]
     if not selected:
         sys.exit(f"No task matched. Use --list to see task names.")
 
-    print(f"Model: {MODEL}   Max attempts: {MAX_ATTEMPTS}   Tasks: {len(selected)}")
+    print(f"Model: {MODEL}   Max attempts: {MAX_ATTEMPTS}   Feedback: {FEEDBACK_MODE}   "
+          f"Tasks: {len(selected)}")
     agent = build_agent()
     rows = [run_task(agent, t) for t in selected]
 
@@ -239,4 +336,6 @@ if __name__ == "__main__":
             print(f"\n----- code for {r['task']} ({r['status']}) -----\n{r['code']}")
 
     print_summary(rows)
-    print(f"Saved: {save_results(rows)}")
+    csv_path = save_results(rows)
+    print(f"Saved: {csv_path}")
+    print(f"Log:   {csv_path[:-4]}.log.md   (every attempt's code and error)")

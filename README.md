@@ -1,4 +1,4 @@
-# Self-Checking, Safe Coding Agent (v0.1)
+# Self-Checking, Safe Coding Agent (v0.2)
 
 A LangGraph coding agent that writes Python code, checks it for dangerous actions, runs tests, and fixes its own mistakes (up to 3 tries). Runs free and offline using Gemma through Ollama.
 
@@ -48,21 +48,50 @@ python agent.py                     # run all tasks
 python agent.py --task roman        # run one task
 python agent.py --level tricky      # run only the tricky tasks
 python agent.py --max-attempts 1    # self-checking OFF (for comparison)
+python agent.py --feedback simple   # raw Python errors only (for comparison)
 python agent.py --show-code         # also print the final code
 python agent.py --list              # list task names
 ```
 
-At the end you get a summary table, and the results are saved in `results/` as a CSV file.
+At the end you get a summary table. Two files are saved in `results/`:
+- a `.csv` with the numbers (task, status, attempts, time, settings)
+- a `.log.md` with **every attempt's code and the error the model was shown** - read it to see *why* tasks fail
 
-**Experiment idea:** run once with `--max-attempts 1` and once with the default (3). The difference in "Passed" shows how much self-checking helps.
+## Feedback modes
+
+When tests fail, what the agent tells the model matters:
+
+| Mode | What the model is told |
+|------|------------------------|
+| `simple` | the raw Python error, e.g. `AssertionError` on line 7 |
+| `detailed` (default) | which test failed, what the code returned, what was expected, and the values of loop variables |
+
+Example of `detailed` feedback:
+```
+Test failed: assert compress('abc') == 'abc'
+  your code returned: '3a'
+  expected:           'abc'
+```
+
+## Experiments
+
+Run each a few times (model output varies), on the tricky tasks:
+
+| # | Command | What it measures |
+|---|---------|------------------|
+| 1 | `python agent.py --level tricky --max-attempts 1` | no self-checking (baseline) |
+| 2 | `python agent.py --level tricky --feedback simple` | self-checking with raw errors |
+| 3 | `python agent.py --level tricky --feedback detailed` | self-checking with detailed feedback |
+
+First results (gemma3:4b, tricky tasks): #1 passed 0/6, #2 passed 1/6.
 
 ## Roadmap
 
 - [x] v0.1 Write -> safety check -> test -> retry loop
 - [x] v0.1.1 Benchmark of 7 tasks, summary table, CSV results
 - [x] v0.1.2 6 "tricky" tasks with unusual rules (to avoid data contamination)
-- [ ] v0.2 Replace regex safety check with Python AST checks
-- [ ] v0.3 Run tests inside Docker (real sandbox)
-- [ ] v0.4 Human-in-the-loop approval for risky actions (LangGraph `interrupt`)
-- [ ] v0.5 Prompt-injection test set + measure attacks blocked
-- [ ] v0.6 Benchmark: tasks solved with vs without self-checking
+- [x] v0.2 Detailed test feedback (which test, got vs expected) + attempt log
+- [ ] v0.3 Replace regex safety check with Python AST checks
+- [ ] v0.4 Run tests inside Docker (real sandbox)
+- [ ] v0.5 Human-in-the-loop approval for risky actions (LangGraph `interrupt`)
+- [ ] v0.6 Prompt-injection test set + measure attacks blocked
