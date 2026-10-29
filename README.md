@@ -1,4 +1,4 @@
-# Self-Checking, Safe Coding Agent (v0.3)
+# Self-Checking, Safe Coding Agent (v0.4)
 
 A LangGraph coding agent that writes Python code, checks it for dangerous actions, runs tests, and fixes its own mistakes (up to 3 tries). Runs free and offline using Gemma through Ollama.
 
@@ -54,6 +54,7 @@ python agent.py --level tricky      # run only the tricky tasks
 python agent.py --max-attempts 1    # self-checking OFF (for comparison)
 python agent.py --feedback simple   # raw Python errors only (for comparison)
 python agent.py --no-anti-stuck     # old behaviour: allow repeats, temperature 0
+python agent.py --plan              # plan first, then write code
 python agent.py --show-code         # also print the final code
 python agent.py --list              # list task names
 ```
@@ -89,6 +90,16 @@ Run each a few times (model output varies), on the tricky tasks:
 | 3 | `python agent.py --level tricky --feedback detailed` | self-checking with detailed feedback |
 
 | 4 | `python agent.py --level tricky --no-anti-stuck` | detailed feedback, but repeats allowed |
+| 5 | `python agent.py --level tricky --plan` | plan first, then code |
+
+## Plan-first mode (`--plan`)
+
+Before writing any code, the model writes a plan with three parts:
+- **RULES**: every rule from the task as a numbered list
+- **EXAMPLES**: 3 small inputs worked by hand, step by step
+- **STEPS**: the algorithm
+
+The code is then written from that plan. When a test fails, the model goes back to the **plan**: it works through the failing input by hand, finds which rule or step was wrong, and writes a corrected plan. This targets finding 7: retries that only patch code instead of rethinking the approach. The log file shows each plan next to its code.
 
 Then run `python analyze.py` to see, for every task, each attempt's error and which attempts were copies of an earlier one.
 
@@ -117,7 +128,8 @@ Then run `python analyze.py` to see, for every task, each attempt's error and wh
 - [x] v0.1.2 6 "tricky" tasks with unusual rules (to avoid data contamination)
 - [x] v0.2 Detailed test feedback (which test, got vs expected) + attempt log
 - [x] v0.3 Anti-stuck: detect repeated code, raise temperature on retries, list earlier errors; `analyze.py`
-- [ ] v0.4 Replace regex safety check with Python AST checks
-- [ ] v0.5 Run tests inside Docker (real sandbox)
-- [ ] v0.6 Human-in-the-loop approval for risky actions (LangGraph `interrupt`)
-- [ ] v0.7 Prompt-injection test set + measure attacks blocked
+- [x] v0.4 Plan-first mode: rules + worked examples + steps before code; retries fix the plan
+- [ ] v0.5 Replace regex safety check with Python AST checks
+- [ ] v0.6 Run tests inside Docker (real sandbox)
+- [ ] v0.7 Human-in-the-loop approval for risky actions (LangGraph `interrupt`)
+- [ ] v0.8 Prompt-injection test set + measure attacks blocked

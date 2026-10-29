@@ -1,5 +1,5 @@
 """
-Self-Checking, Safe Coding Agent (v0.3)
+Self-Checking, Safe Coding Agent (v0.4)
 
 Usage:
   python agent.py                     # run all tasks in tasks.py
@@ -8,9 +8,11 @@ Usage:
   python agent.py --max-attempts 1    # self-checking OFF (for comparison)
   python agent.py --feedback simple   # raw Python errors only (for comparison)
   python agent.py --no-anti-stuck     # allow repeated code, temperature 0 (old behaviour)
+  python agent.py --plan              # plan first (rules, worked examples, steps), then code
   python agent.py --list              # show task names
 
 What it does:
+  0. plan         -> (only with --plan) rules + worked examples + steps, no code yet
   1. write_code   -> the LLM writes Python code for a task
   2. check_repeat -> if the code is the same as an earlier failed attempt, ask for
                      a different approach (no test run wasted)
@@ -55,6 +57,7 @@ TEST_TIMEOUT_SECONDS = 10
 FEEDBACK_MODE = "detailed"   # "detailed" (which test, got vs expected) or "simple" (raw error)
 ANTI_STUCK = True            # stop the model repeating the same failed code (see check_repeat)
 RETRY_TEMPERATURES = [0.0, 0.5, 0.8]   # temperature for attempt 1, 2, 3+ when ANTI_STUCK is on
+PLAN_FIRST = False           # --plan: write rules + worked examples + steps BEFORE any code
 
 # Very simple safety rules (v0.1). You will improve these later.
 BLOCKED_PATTERNS = {
@@ -90,6 +93,8 @@ class AgentState(TypedDict):
     status: str     # "running" | "passed" | "blocked"
     history: list   # (code, result) for every attempt - saved to the log file
     repeats: int    # how many times the model returned code it had already tried
+    plan: str       # latest plan (only with --plan)
+    plans: list     # every plan, one per attempt - saved to the log file
 
 
 # ---------------- Helpers ----------------
@@ -100,6 +105,34 @@ def extract_code(text: str) -> str:
 
 
 # ---------------- Nodes (the steps) ----------------
+def make_plan(state: AgentState) -> dict:
+    """Plan-first mode: before any code, the model writes the rules, works examples
+    by hand, and lists the steps. On a retry it must find what was wrong in the PLAN,
+    using the failing test as a worked example - not just patch the code."""
+    prompt = (
+        "You are planning a Python solution. Do NOT write any code yet.\n"
+        f"Task: {state['task']}\n\n"
+        "Write these three sections, short and exact:\n"
+        "RULES: every rule in the task as a numbered list. Keep every exact detail "
+        "(direction, order, when to leave something out, when to raise an error).\n"
+        "EXAMPLES: work through 3 small inputs by hand, step by step, showing input -> output. "
+        "Include at least one edge case. Check each output against the RULES.\n"
+        "STEPS: the algorithm as numbered steps that follow the RULES.\n"
+    )
+    if state["feedback"]:
+        prompt += (
+            f"\nYour previous plan was:\n{state['plan']}\n\n"
+            f"The code written from that plan failed:\n{state['feedback']}\n\n"
+            "The failing case shows where your plan is wrong. Work through that exact input "
+            "by hand using your RULES, find which rule or step is wrong or missing, and write "
+            "a corrected plan. If the whole approach is wrong, choose a different approach.\n"
+        )
+    attempt = state["attempts"] + 1
+    plan = get_llm(attempt).invoke(prompt).content.strip().replace("```", "\'\'\'")
+    print(f"\n--- Attempt {attempt}: plan written ---")
+    return {"plan": plan, "plans": state["plans"] + [plan]}
+
+
 def write_code(state: AgentState) -> dict:
     prompt = (
         "You are a careful Python developer.\n"
@@ -108,6 +141,8 @@ def write_code(state: AgentState) -> dict:
         "- Return ONLY Python code inside one ```python block.\n"
         "- Do not write tests, do not use input(), do not touch files or the network.\n"
     )
+    if PLAN_FIRST and state["plan"]:
+        prompt += f"\nFollow this plan exactly:\n{state['plan']}\n"
     if state["feedback"]:
         if ANTI_STUCK and len(state["history"]) > 1:
             # remind the model of ALL earlier mistakes, not only the last one
@@ -259,10 +294,15 @@ def run_tests(state: AgentState) -> dict:
 
 
 # ---------------- Routing (which step comes next) ----------------
+def next_try() -> str:
+    """Where a retry goes: back to planning (plan-first mode) or straight to coding."""
+    return "plan" if PLAN_FIRST else "write_code"
+
+
 def after_repeat(state: AgentState) -> str:
     if state["status"] != "repeat":
         return "new"
-    return "done" if state["attempts"] >= MAX_ATTEMPTS else "retry"
+    return "done" if state["attempts"] >= MAX_ATTEMPTS else next_try()
 
 
 def after_safety(state: AgentState) -> str:
@@ -272,23 +312,27 @@ def after_safety(state: AgentState) -> str:
 def after_tests(state: AgentState) -> str:
     if state["status"] == "passed" or state["attempts"] >= MAX_ATTEMPTS:
         return "done"
-    return "retry"
+    return next_try()
 
 
 # ---------------- Build the graph ----------------
 def build_agent():
     graph = StateGraph(AgentState)
+    graph.add_node("plan", make_plan)
     graph.add_node("write_code", write_code)
     graph.add_node("check_repeat", check_repeat)
     graph.add_node("check_safety", check_safety)
     graph.add_node("run_tests", run_tests)
 
-    graph.add_edge(START, "write_code")
+    graph.add_edge(START, next_try())
+    graph.add_edge("plan", "write_code")
     graph.add_edge("write_code", "check_repeat")
     graph.add_conditional_edges("check_repeat", after_repeat,
-                                {"new": "check_safety", "retry": "write_code", "done": END})
+                                {"new": "check_safety", "plan": "plan", "write_code": "write_code",
+                                 "done": END})
     graph.add_conditional_edges("check_safety", after_safety, {"blocked": END, "safe": "run_tests"})
-    graph.add_conditional_edges("run_tests", after_tests, {"done": END, "retry": "write_code"})
+    graph.add_conditional_edges("run_tests", after_tests,
+                                {"done": END, "plan": "plan", "write_code": "write_code"})
     return graph.compile()
 
 
@@ -299,7 +343,8 @@ def run_task(agent, item: dict) -> dict:
     start = time.time()
     final = agent.invoke(
         {"task": item["task"], "tests": item["tests"], "code": "", "feedback": "",
-         "attempts": 0, "status": "running", "history": [], "repeats": 0},
+         "attempts": 0, "status": "running", "history": [], "repeats": 0,
+         "plan": "", "plans": []},
         {"recursion_limit": 50},
     )
     status = final["status"] if final["status"] in ("passed", "blocked") else "failed"
@@ -312,6 +357,7 @@ def run_task(agent, item: dict) -> dict:
         "seconds": round(time.time() - start, 1),
         "code": final["code"],
         "history": final["history"],
+        "plans": final["plans"],
     }
 
 
@@ -335,23 +381,26 @@ def save_results(rows: list[dict]) -> str:
     os.makedirs("results", exist_ok=True)
     base = os.path.join("results", time.strftime("%Y%m%d-%H%M%S")
                         + f"-{MODEL.replace(':', '_')}-{FEEDBACK_MODE}-max{MAX_ATTEMPTS}"
-                        + ("" if ANTI_STUCK else "-noantistuck"))
+                        + ("" if ANTI_STUCK else "-noantistuck") + ("-plan" if PLAN_FIRST else ""))
     fields = ["task", "level", "status", "attempts", "repeats", "seconds",
-              "model", "feedback", "max_attempts", "anti_stuck"]
+              "model", "feedback", "max_attempts", "anti_stuck", "plan_first"]
     with open(base + ".csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for r in rows:
             writer.writerow({**{k: r[k] for k in fields[:6]}, "model": MODEL,
                              "feedback": FEEDBACK_MODE, "max_attempts": MAX_ATTEMPTS,
-                             "anti_stuck": ANTI_STUCK})
+                             "anti_stuck": ANTI_STUCK, "plan_first": PLAN_FIRST})
     with open(base + ".log.md", "w", encoding="utf-8") as f:
         f.write(f"# Run log\n\nModel: {MODEL} | feedback: {FEEDBACK_MODE} | max attempts: {MAX_ATTEMPTS}"
-                f" | anti-stuck: {ANTI_STUCK}\n")
+                f" | anti-stuck: {ANTI_STUCK} | plan-first: {PLAN_FIRST}\n")
         for r in rows:
             f.write(f"\n## {r['task']} ({r['level']}): {r['status']}\n")
             for i, (code, result) in enumerate(r["history"], 1):
-                f.write(f"\n### Attempt {i}\n\n```python\n{code}\n```\n\nResult:\n\n```\n{result}\n```\n")
+                f.write(f"\n### Attempt {i}\n\n")
+                if i <= len(r["plans"]):
+                    f.write(f"Plan:\n\n```text\n{r['plans'][i - 1]}\n```\n\n")
+                f.write(f"```python\n{code}\n```\n\nResult:\n\n```\n{result}\n```\n")
     return base + ".csv"
 
 
@@ -367,6 +416,8 @@ if __name__ == "__main__":
                         help="detailed = which test failed + got vs expected; simple = raw error")
     parser.add_argument("--no-anti-stuck", action="store_true",
                         help="turn OFF repeat detection and retry temperatures (old behaviour)")
+    parser.add_argument("--plan", action="store_true",
+                        help="plan first: rules + worked examples + steps before writing code")
     parser.add_argument("--show-code", action="store_true", help="print the final code of each task")
     parser.add_argument("--list", action="store_true", help="list task names and exit")
     args = parser.parse_args()
@@ -379,6 +430,7 @@ if __name__ == "__main__":
     MAX_ATTEMPTS = args.max_attempts
     FEEDBACK_MODE = args.feedback
     ANTI_STUCK = not args.no_anti_stuck
+    PLAN_FIRST = args.plan
     selected = [t for t in TASKS
                 if (not args.task or t["name"] == args.task)
                 and (not args.level or t["level"] == args.level)]
@@ -386,7 +438,8 @@ if __name__ == "__main__":
         sys.exit(f"No task matched. Use --list to see task names.")
 
     print(f"Model: {MODEL}   Max attempts: {MAX_ATTEMPTS}   Feedback: {FEEDBACK_MODE}   "
-          f"Anti-stuck: {'on' if ANTI_STUCK else 'off'}   Tasks: {len(selected)}")
+          f"Anti-stuck: {'on' if ANTI_STUCK else 'off'}   Plan-first: {'on' if PLAN_FIRST else 'off'}   "
+          f"Tasks: {len(selected)}")
     agent = build_agent()
     rows = [run_task(agent, t) for t in selected]
 

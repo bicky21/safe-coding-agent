@@ -25,7 +25,8 @@ def analyze(path: str) -> tuple[int, int]:
     for section in re.split(r"\n## ", text)[1:]:
         name = section.split("\n")[0]
         attempts = re.findall(
-            r"### Attempt \d+\n\n```python\n(.*?)\n```\n\nResult:\n\n```\n(.*?)\n```", section, re.S)
+            r"### Attempt \d+\n\n(?:Plan:\n\n```text\n.*?\n```\n\n)?```python\n(.*?)\n```\n\nResult:\n\n```\n(.*?)\n```",
+            section, re.S)
         seen = []
         stuck = []
         for i, (code, _) in enumerate(attempts, 1):
