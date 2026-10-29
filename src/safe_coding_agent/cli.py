@@ -178,17 +178,28 @@ def cmd_compare(a) -> int:
     if not rows:
         out(f"No saved runs found in {a.runs_dir}/ (run `sca bench` first).")
         return 1
-    out(f"\n{'model':<26}{'suite':<18}{'method':<44}{'runs':>5}{'tasks':>9}{'first try':>12}"
-        f"{'best':>10}{'range':>9}{'min/run':>9}")
-    out("-" * 142)
+    def suite_name(suite: str) -> str:
+        """'/long/path/my-tasks:hard' -> 'my-tasks:hard'; 'builtin:tricky' stays as it is."""
+        base, level = suite.rsplit(":", 1) if ":" in Path(suite).name else (suite, "")
+        return Path(base).name + (f":{level}" if level else "")
+
+    table = [["model", "tasks", "method", "runs", "passed", "first try", "best", "range", "min/run"]]
     for r in rows:
         t = r["tests_total"]
-        tasks = f"{r['tasks_passed']:.1f}/{r['tasks']}"
-        first = f"{r['first']:.1f}/{t}"
-        best = f"{r['best']:.1f}/{t}"
-        rng = f"{r['best_min']}-{r['best_max']}"
-        out(f"{r['model'][:25]:<26}{r['suite'][-17:]:<18}{r['method'][:43]:<44}{r['runs']:>5}"
-            f"{tasks:>9}{first:>12}{best:>10}{rng:>9}{r['minutes']:>9.1f}")
+        table.append([r["model"], suite_name(r["suite"]), r["method"], str(r["runs"]),
+                      f"{r['tasks_passed']:.1f}/{r['tasks']}", f"{r['first']:.1f}/{t}", f"{r['best']:.1f}/{t}",
+                      f"{r['best_min']}-{r['best_max']}", f"{r['minutes']:.1f}"])
+    widths = [max(len(row[i]) for row in table) for i in range(len(table[0]))]
+    left = {0, 1, 2}                      # text columns left-aligned, numbers right-aligned
+    def fmt(row: list[str]) -> str:
+        cells = zip(row, widths, strict=True)
+        return "  ".join(c.ljust(w) if i in left else c.rjust(w) for i, (c, w) in enumerate(cells))
+
+    lines = [fmt(row) for row in table]
+    out("\n" + lines[0])
+    out("-" * len(lines[0]))
+    for line in lines[1:]:
+        out(line)
     out("\nfirst try = without self-checking; best = with self-checking. If two methods differ by less "
         "than their range, the difference is probably luck.")
     return 0
